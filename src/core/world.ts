@@ -23,6 +23,13 @@ export interface Config {
   waveCountdownSeconds: number;
   /** Wave n has this many enemy dinghies plus n. */
   waveSizeBase: number;
+  /**
+   * The first Wave with enemy ships. From it, Wave n also has (n - shipsFromWave) / 2 + 1 enemy ships,
+   * rounded down, so one more ship joins every second Wave.
+   */
+  shipsFromWave: number;
+  /** Each Wave's enemies have this fraction more max health than the last Wave's, compounded from Wave 1. */
+  enemyHealthGrowth: number;
   /** Enemies spawn between these fractions of the Arena radius. */
   spawnInner: number;
   spawnOuter: number;
@@ -72,8 +79,8 @@ export interface Config {
   vesselClasses: Record<VesselClassName, VesselClass>;
 }
 
-/** The player sails a smallDinghy. Enemy dinghies sail the same boat, but are weaker. */
-export type VesselClassName = 'smallDinghy' | 'enemyDinghy';
+/** The player sails a smallDinghy. Enemy dinghies sail the same boat, but are weaker. Enemy ships join later Waves. */
+export type VesselClassName = 'smallDinghy' | 'enemyDinghy' | 'enemyShip';
 
 /** The stats every vessel of one class shares. */
 export interface VesselClass {
@@ -262,8 +269,15 @@ export function createWorld(seed: number, config: Config): World {
   };
 }
 
-function newVessel(id: number, vesselClass: VesselClassName, x: number, y: number, heading: number, config: Config): Vessel {
-  const { health } = config.vesselClasses[vesselClass];
+function newVessel(
+  id: number,
+  vesselClass: VesselClassName,
+  x: number,
+  y: number,
+  heading: number,
+  config: Config,
+  health = config.vesselClasses[vesselClass].health,
+): Vessel {
   return {
     id,
     vesselClass,
@@ -529,18 +543,25 @@ function advanceWave(world: World): World {
 }
 
 /**
- * Wave n has waveSizeBase + n enemy dinghies at seeded points in the spawn ring, each at least
- * minSpawnDistance from the player vessel and clear of the others, facing the player vessel.
+ * Wave n has waveSizeBase + n enemy dinghies, and enemy ships from shipsFromWave, at seeded points in the
+ * spawn ring, each at least minSpawnDistance from the player vessel and clear of the others, facing the
+ * player vessel. Their max health grows by enemyHealthGrowth each Wave.
  */
 function spawnWave(world: World): World {
   const { state, config } = world;
-  const { player } = state;
+  const { player, wave } = state;
   const random = seededRandom(world.random);
-  const radius = config.vesselClasses.enemyDinghy.radius;
   const [inner, outer] = [config.spawnInner * config.arenaRadius, config.spawnOuter * config.arenaRadius];
+  const ships = wave < config.shipsFromWave ? 0 : Math.floor((wave - config.shipsFromWave) / 2) + 1;
+  const classes: VesselClassName[] = [
+    ...Array<VesselClassName>(config.waveSizeBase + wave).fill('enemyDinghy'),
+    ...Array<VesselClassName>(ships).fill('enemyShip'),
+  ];
+  const growth = (1 + config.enemyHealthGrowth) ** (wave - 1);
+  const radiusOf = (vesselClass: VesselClassName) => config.vesselClasses[vesselClass].radius;
   const enemies: Vessel[] = [];
   let nextId = world.nextId;
-  for (let i = 0; i < config.waveSizeBase + state.wave; i++) {
+  for (const vesselClass of classes) {
     for (let attempt = 0; ; attempt++) {
       if (attempt === 1000) throw new Error('No room to spawn the Wave. Check the spawn settings in the config.');
       // Uniform over the ring's area, not bunched at the inner rim.
@@ -549,8 +570,9 @@ function spawnWave(world: World): World {
       const x = Math.sin(angle) * distance;
       const y = -Math.cos(angle) * distance;
       if (Math.hypot(x - player.x, y - player.y) < config.minSpawnDistance) continue;
-      if (enemies.some((enemy) => Math.hypot(x - enemy.x, y - enemy.y) < 2 * radius)) continue;
-      enemies.push(newVessel(nextId++, 'enemyDinghy', x, y, bearing(x, y, player.x, player.y), config));
+      if (enemies.some((enemy) => Math.hypot(x - enemy.x, y - enemy.y) < radiusOf(enemy.vesselClass) + radiusOf(vesselClass))) continue;
+      const health = config.vesselClasses[vesselClass].health * growth;
+      enemies.push(newVessel(nextId++, vesselClass, x, y, bearing(x, y, player.x, player.y), config, health));
       break;
     }
   }

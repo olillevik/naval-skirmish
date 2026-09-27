@@ -10,6 +10,8 @@ export const defaultConfig: Config = {
   sinkingSeconds: 1.5,
   waveCountdownSeconds: 5,
   waveSizeBase: 2,
+  shipsFromWave: 4,
+  enemyHealthGrowth: 0.05,
   spawnInner: 0.4,
   spawnOuter: 0.75,
   minSpawnDistance: 500,
@@ -36,5 +38,7 @@ export const defaultConfig: Config = {
     smallDinghy: { topSpeed: 150, acceleration: 100, turnRate: Math.PI / 2, radius: 20, health: 100, volleySize: 1, arrowDamage: 5, gold: 0 },
     // The same boat as the player's, but weaker.
     enemyDinghy: { topSpeed: 150, acceleration: 100, turnRate: Math.PI / 2, radius: 20, health: 30, volleySize: 1, arrowDamage: 5, gold: 5 },
+    // The sprite is 66 x 113 px, drawn at 1x. Faster than a dinghy, but slow to turn and to get going.
+    enemyShip: { topSpeed: 200, acceleration: 50, turnRate: Math.PI / 4, radius: 40, health: 120, volleySize: 3, arrowDamage: 5, gold: 20 },
   },
 };

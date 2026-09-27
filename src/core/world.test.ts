@@ -25,6 +25,8 @@ const config: Config = {
   sinkingSeconds: 1.5,
   waveCountdownSeconds: 1000,
   waveSizeBase: 2,
+  shipsFromWave: 4,
+  enemyHealthGrowth: 0.05,
   spawnInner: 0.4,
   spawnOuter: 0.75,
   minSpawnDistance: 500,
@@ -48,6 +50,7 @@ const config: Config = {
   vesselClasses: {
     smallDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 100, volleySize: 1, arrowDamage: 5, gold: 0 },
     enemyDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 30, volleySize: 1, arrowDamage: 5, gold: 5 },
+    enemyShip: { topSpeed: 160, acceleration: 15, turnRate: Math.PI / 4, radius: 40, health: 120, volleySize: 3, arrowDamage: 5, gold: 20 },
   },
 };
 const noCommands: Commands = { throttleUp: false, throttleDown: false, rudder: 0 };
@@ -369,6 +372,7 @@ const harmless: Config = {
   vesselClasses: {
     smallDinghy: { ...defaultConfig.vesselClasses.smallDinghy, arrowDamage: 0 },
     enemyDinghy: { ...defaultConfig.vesselClasses.enemyDinghy, arrowDamage: 0 },
+    enemyShip: { ...defaultConfig.vesselClasses.enemyShip, arrowDamage: 0 },
   },
 };
 
@@ -453,6 +457,40 @@ describe('Waves', () => {
     }
   });
 
+  it('has no enemy ships before Wave 4, then (n - 2) / 2 of them, rounded down, alongside the dinghies', () => {
+    let world = untilSpawned(createWorld(1, doomed));
+    const makeup = [];
+    for (let wave = 1; wave <= 8; wave++) {
+      const { enemies } = readState(world);
+      const count = (vesselClass: string) => enemies.filter((enemy) => enemy.vesselClass === vesselClass).length;
+      makeup.push([count('enemyDinghy'), count('enemyShip')]);
+      world = untilSpawned(untilNoEnemies(world));
+    }
+
+    expect(makeup).toEqual([
+      [3, 0],
+      [4, 0],
+      [5, 0],
+      [6, 1],
+      [7, 1],
+      [8, 2],
+      [9, 2],
+      [10, 3],
+    ]);
+  });
+
+  it('gives enemies 5% more max health each Wave, compounded, and spawns them at full health', () => {
+    let world = untilSpawned(createWorld(1, doomed));
+    for (let wave = 1; wave <= 6; wave++) {
+      for (const enemy of readState(world).enemies) {
+        const base = enemy.vesselClass === 'enemyShip' ? 120 : 30;
+        expect(enemy.maxHealth).toBeCloseTo(base * 1.05 ** (wave - 1));
+        expect(enemy.health).toBe(enemy.maxHealth);
+      }
+      world = untilSpawned(untilNoEnemies(world));
+    }
+  });
+
   it('never spawns two enemies on top of each other', () => {
     const crowded: Config = { ...waves, waveSizeBase: 40 };
     const { enemies } = readState(untilSpawned(createWorld(1, crowded)));
@@ -483,6 +521,28 @@ describe('enemy AI', () => {
       // Still circling, not parked.
       expect(distanceBetween(readState(run(later, noCommands, 60)).enemies[0], enemies[0])).toBeGreaterThan(30);
     }
+  });
+
+  it("sails an enemy ship by the ship class's stats, faster than a dinghy but slower to get going and to turn", () => {
+    const fleet: Config = { ...waves, shipsFromWave: 1 };
+    const { topSpeed, acceleration, turnRate } = defaultConfig.vesselClasses.enemyShip;
+    const shipIn = (world: World) => readState(world).enemies.find((enemy) => enemy.vesselClass === 'enemyShip')!;
+    let world = untilSpawned(createWorld(1, fleet));
+    let [fastest, sharpest, before] = [0, 0, shipIn(world)];
+    for (let tick = 0; tick < 60 * 20; tick++) {
+      world = step(world, noCommands);
+      const ship = shipIn(world);
+      expect(ship.speed - before.speed).toBeLessThanOrEqual(acceleration / 60 + 1e-9);
+      fastest = Math.max(fastest, ship.speed);
+      sharpest = Math.max(sharpest, Math.abs(turnBetween(before.heading, ship.heading)));
+      before = ship;
+    }
+
+    expect(topSpeed).toBeGreaterThan(defaultConfig.vesselClasses.enemyDinghy.topSpeed);
+    expect(acceleration).toBeLessThan(defaultConfig.vesselClasses.enemyDinghy.acceleration);
+    expect(turnRate).toBeLessThan(defaultConfig.vesselClasses.enemyDinghy.turnRate);
+    expect(fastest).toBeCloseTo(topSpeed);
+    expect(sharpest).toBeCloseTo(turnRate / 60);
   });
 
   it('does not sail into the Rim current by itself, even to reach a player at its rim', () => {
@@ -566,6 +626,7 @@ function withClasses(base: Config, player: Partial<VesselClass>, enemy: Partial<
     vesselClasses: {
       smallDinghy: { ...base.vesselClasses.smallDinghy, ...player },
       enemyDinghy: { ...base.vesselClasses.enemyDinghy, ...enemy },
+      enemyShip: base.vesselClasses.enemyShip,
     },
   };
 }
@@ -635,6 +696,19 @@ describe('Arrows', () => {
     expect(readState(hit).enemies[0].health).toBe(93);
     expect(readState(hit).events).toContainEqual({ type: 'arrowHit', vesselId: enemies[0].id });
     expect(arrowsOf(readState(hit), 'player')).toHaveLength(2);
+  });
+
+  it('come in Volleys of 3 from an enemy ship, fanned out around the aim', () => {
+    // Wave 1 has one still dinghy and one still ship.
+    const fleet: Config = { ...still, shipsFromWave: 1, volleySeconds: 100 };
+    const fired = step(untilSpawned(createWorld(1, fleet)), noCommands);
+    const { player, enemies } = readState(fired);
+    const ship = enemies.find((enemy) => enemy.vesselClass === 'enemyShip')!;
+    const shipArrows = arrowsOf(readState(fired), 'enemy').filter(({ x, y }) => x === ship.x && y === ship.y);
+    const aim = bearingTo(ship, player);
+
+    expect(shipArrows.map((arrow) => turnBetween(aim, arrow.heading).toFixed(3))).toEqual(['-0.100', '0.000', '0.100']);
+    expect(shipArrows.map((arrow) => arrow.damage)).toEqual([5, 5, 5]);
   });
 
   it('are removed once they have flown the Arrow range', () => {
@@ -846,8 +920,8 @@ describe('regen', () => {
 
 describe('health between Waves', () => {
   it('carries over from one Wave to the next', () => {
-    // One Volley each, and the player's sinks the enemy.
-    const lasting = withClasses({ ...still, volleySeconds: 100, regenRate: 0, sinkingSeconds: 0.5 }, { arrowDamage: 5 }, { health: 5, arrowDamage: 20 });
+    // One Volley each, and the player's sinks the enemy. The next Wave's enemies are no tougher.
+    const lasting = withClasses({ ...still, volleySeconds: 100, regenRate: 0, sinkingSeconds: 0.5, enemyHealthGrowth: 0 }, { arrowDamage: 5 }, { health: 5, arrowDamage: 20 });
     const hit = until(untilSpawned(createWorld(1, lasting)), (state) => state.player.health < 100);
     const nextWave = until(hit, (state) => state.wave === 2 && state.waveStatus === 'fighting');
 

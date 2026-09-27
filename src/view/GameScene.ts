@@ -31,6 +31,14 @@ const RING_SEGMENTS = 256;
 /** How far past the Edge space is drawn. Wider than half of any screen, so the view never runs out of stars. */
 const SPACE_DEPTH = 2500;
 const STARS_PER_SQUARE_PX = 1 / 15000;
+/**
+ * Enemy ships use the pack's coloured ship sprites, by the number in the pack's file name: black, red, green,
+ * blue and yellow. The white ship is left out, as the closest to the player's plain dinghy. Each colour has
+ * 4 damage states, from whole to wreck, 6 numbers apart.
+ */
+const ENEMY_SHIP_COLOURS = [2, 3, 4, 5, 6];
+const SHIP_DAMAGE_STATES = 4;
+const SHIP_DAMAGE_STEP = 6;
 /** Enemy dinghies use the pack's other dinghy sprites, over a red ring, so the player's dinghy stands out. */
 const ENEMY_DINGHY_SPRITES = ['enemyDinghy1', 'enemyDinghy2'];
 const ENEMY_MARK_COLOUR = 0xd62f2f;
@@ -51,8 +59,8 @@ const EXPLOSION_FRAMES = ['explosion3', 'explosion2', 'explosion1'];
 const EXPLOSION_FPS = 15;
 const HEALTH_BAR_WIDTH = 40;
 const HEALTH_BAR_HEIGHT = 5;
-/** How far above an enemy's centre its health bar sits, px. */
-const HEALTH_BAR_OFFSET = 36;
+/** How far above an enemy's centre its health bar sits, in collision radii. */
+const HEALTH_BAR_OFFSET = 1.8;
 const HEALTH_BAR_COLOUR = 0x4caf50;
 const HEALTH_BAR_BACK_COLOUR = 0x2b0b0b;
 /** Where the view keeps the Best score. The core knows nothing about storage. */
@@ -65,6 +73,8 @@ interface VesselSprite {
   hull: GameObjects.Image;
   fire: GameObjects.Image;
   sinking: boolean;
+  /** A ship's hull textures, from whole to wreck. Dinghies have none, and show fire instead. */
+  damageStates?: string[];
 }
 
 type Keys = Record<'W' | 'A' | 'S' | 'D' | 'UP' | 'DOWN' | 'LEFT' | 'RIGHT', Input.Keyboard.Key>;
@@ -109,6 +119,7 @@ export class GameScene extends Scene {
     this.load.image('water', `${base}assets/tile_73.png`);
     this.load.image('fire', `${base}assets/fire1.png`);
     for (const frame of EXPLOSION_FRAMES) this.load.image(frame, `${base}assets/${frame}.png`);
+    for (const texture of ENEMY_SHIP_COLOURS.flatMap(shipDamageStates)) this.load.image(texture, `${base}assets/${texture}.png`);
   }
 
   create(): void {
@@ -305,9 +316,7 @@ export class GameScene extends Scene {
     for (const enemy of enemies) {
       let sprite = this.enemies.get(enemy.id);
       if (!sprite) {
-        sprite = this.addVesselSprite(ENEMY_DINGHY_SPRITES[enemy.id % ENEMY_DINGHY_SPRITES.length]);
-        const radius = defaultConfig.vesselClasses[enemy.vesselClass].radius * ENEMY_MARK_SCALE;
-        sprite.body.addAt(this.add.circle(0, 0, radius, ENEMY_MARK_COLOUR, 0.35).setStrokeStyle(3, ENEMY_MARK_COLOUR), 0);
+        sprite = enemy.vesselClass === 'enemyShip' ? this.addShipSprite(enemy) : this.addEnemyDinghySprite(enemy);
         this.enemies.set(enemy.id, sprite);
       }
       this.drawVessel(sprite, enemy);
@@ -315,21 +324,36 @@ export class GameScene extends Scene {
     }
   }
 
-  private addVesselSprite(texture: string): VesselSprite {
-    const hull = this.add.image(0, 0, texture).setScale(DINGHY_SCALE);
+  private addEnemyDinghySprite(enemy: Vessel): VesselSprite {
+    const sprite = this.addVesselSprite(ENEMY_DINGHY_SPRITES[enemy.id % ENEMY_DINGHY_SPRITES.length]);
+    const radius = defaultConfig.vesselClasses[enemy.vesselClass].radius * ENEMY_MARK_SCALE;
+    sprite.body.addAt(this.add.circle(0, 0, radius, ENEMY_MARK_COLOUR, 0.35).setStrokeStyle(3, ENEMY_MARK_COLOUR), 0);
+    return sprite;
+  }
+
+  private addShipSprite(enemy: Vessel): VesselSprite {
+    const damageStates = shipDamageStates(ENEMY_SHIP_COLOURS[enemy.id % ENEMY_SHIP_COLOURS.length]);
+    return { ...this.addVesselSprite(damageStates[0], 1), damageStates };
+  }
+
+  private addVesselSprite(texture: string, scale = DINGHY_SCALE): VesselSprite {
+    const hull = this.add.image(0, 0, texture).setScale(scale);
     const fire = this.add.image(0, 0, 'fire').setScale(FIRE_SCALE).setVisible(false);
     return { body: this.add.container(0, 0, [hull, fire]), hull, fire, sinking: false };
   }
 
   private drawVessel(sprite: VesselSprite, vessel: Vessel): void {
     sprite.body.setPosition(vessel.x, vessel.y).setRotation(vessel.heading + SPRITE_ROTATION);
+    if (sprite.damageStates) sprite.hull.setTexture(sprite.damageStates[shipDamageState(vessel)]);
+    // A ship shows its damage on the hull, so only its wreck burns.
+    const burning = sprite.damageStates ? vessel.health === 0 : vessel.health < vessel.maxHealth * FIRE_BELOW;
     // The flames stay upright on the screen as the hull turns.
-    sprite.fire.setVisible(vessel.health < vessel.maxHealth * FIRE_BELOW).setRotation(-sprite.body.rotation);
+    sprite.fire.setVisible(burning).setRotation(-sprite.body.rotation);
   }
 
-  private drawHealthBar({ x, y, health, maxHealth }: Vessel): void {
+  private drawHealthBar({ x, y, health, maxHealth, vesselClass }: Vessel): void {
     const left = x - HEALTH_BAR_WIDTH / 2;
-    const top = y - HEALTH_BAR_OFFSET;
+    const top = y - defaultConfig.vesselClasses[vesselClass].radius * HEALTH_BAR_OFFSET;
     this.overlay.fillStyle(HEALTH_BAR_BACK_COLOUR, 0.8).fillRect(left, top, HEALTH_BAR_WIDTH, HEALTH_BAR_HEIGHT);
     this.overlay.fillStyle(HEALTH_BAR_COLOUR).fillRect(left, top, (HEALTH_BAR_WIDTH * health) / maxHealth, HEALTH_BAR_HEIGHT);
   }
@@ -368,10 +392,11 @@ export class GameScene extends Scene {
     });
   }
 
-  /** The wreck: a dark, burning hull that fades out over the sinking time. */
+  /** The wreck: a dark, burning hull that fades out over the sinking time. A ship has a wreck sprite of its own. */
   private sink(sprite: VesselSprite): Tweens.Tween {
     sprite.sinking = true;
-    sprite.hull.setTint(WRECK_TINT);
+    if (sprite.damageStates) sprite.hull.clearTint();
+    else sprite.hull.setTint(WRECK_TINT);
     sprite.fire.setVisible(true);
     return this.tweens.add({ targets: sprite.body, alpha: 0, duration: defaultConfig.sinkingSeconds * 1000 });
   }
@@ -401,6 +426,17 @@ function saveBestScore(score: number): number {
     // A browser that blocks storage still gets a game-over screen.
   }
   return score;
+}
+
+/** The texture keys of one ship colour's damage states, from whole to wreck, named as in public/assets. */
+function shipDamageStates(colour: number): string[] {
+  return Array.from({ length: SHIP_DAMAGE_STATES }, (_, i) => `ship${colour + i * SHIP_DAMAGE_STEP}`);
+}
+
+/** Whole above 2/3 of max health, then the two damaged states by thirds, and the wreck at zero. */
+function shipDamageState({ health, maxHealth }: Vessel): number {
+  if (health === 0) return SHIP_DAMAGE_STATES - 1;
+  return Math.min(SHIP_DAMAGE_STATES - 2, Math.floor((1 - health / maxHealth) * (SHIP_DAMAGE_STATES - 1)));
 }
 
 /** The Captain's Fireball cooldown in whole seconds, rounded up. 0 means ready. */
