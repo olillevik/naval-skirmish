@@ -48,5 +48,9 @@ export const defaultConfig: Config = {
   },
   cabin: {
     repair: { prices: [10], healShare: 0.25 },
+    maxHealth: { prices: [30, 60, 120], healthShare: 0.25 },
+    regen: { prices: [25, 50, 100], regenRate: 0.01 },
+    arrowRate: { prices: [20, 40, 80], volleySeconds: [0.8, 0.65, 0.5] },
+    volleySize: { prices: [30, 60, 120, 240], arrows: 1 },
   },
 };

@@ -6,6 +6,7 @@ import {
   readState,
   step,
   type CabinAction,
+  type CabinItemName,
   type Commands,
   type Config,
   type VesselClass,
@@ -61,6 +62,10 @@ const config: Config = {
   },
   cabin: {
     repair: { prices: [10], healShare: 0.25 },
+    maxHealth: { prices: [30, 60, 120], healthShare: 0.25 },
+    regen: { prices: [25, 50, 100], regenRate: 0.01 },
+    arrowRate: { prices: [20, 40, 80], volleySeconds: [0.8, 0.65, 0.5] },
+    volleySize: { prices: [30, 60, 120, 240], arrows: 1 },
   },
 };
 const noCommands: Commands = { throttleUp: false, throttleDown: false, rudder: 0 };
@@ -1251,6 +1256,15 @@ describe('Wizard vessels', () => {
   });
 });
 
+/** The Cabin at the start of a Run, with the prices in the test config and no Gold. */
+const noPurchases = [
+  { item: 'repair', level: 0, highestLevel: null, nextPrice: 10, canBuy: false },
+  { item: 'maxHealth', level: 0, highestLevel: 3, nextPrice: 30, canBuy: false },
+  { item: 'regen', level: 0, highestLevel: 3, nextPrice: 25, canBuy: false },
+  { item: 'arrowRate', level: 0, highestLevel: 3, nextPrice: 20, canBuy: false },
+  { item: 'volleySize', level: 0, highestLevel: 4, nextPrice: 30, canBuy: false },
+];
+
 describe('the Cabin', () => {
   const buyRepair: CabinAction = { type: 'buy', item: 'repair' };
   const repairOf = (world: World) => readState(world).cabin.find((item) => item.item === 'repair')!;
@@ -1264,8 +1278,8 @@ describe('the Cabin', () => {
   const afterFight = (enemyArrowDamage: number) =>
     until(untilSpawned(createWorld(1, shop(enemyArrowDamage))), (state) => state.gold > 0 && state.player.health <= 100 - enemyArrowDamage);
 
-  it('starts a Run with no purchases, listing Repair at its price', () => {
-    expect(readState(createWorld(1, config)).cabin).toEqual([{ item: 'repair', level: 0, highestLevel: null, nextPrice: 10, canBuy: false }]);
+  it('starts a Run with no purchases, listing every item at its first price', () => {
+    expect(readState(createWorld(1, config)).cabin).toEqual(noPurchases);
   });
 
   it('shows the player vessel class', () => {
@@ -1285,7 +1299,7 @@ describe('the Cabin', () => {
       ...before,
       gold: 40,
       player: { ...before.player, health: 95 },
-      cabin: [{ item: 'repair', level: 1, highestLevel: null, nextPrice: 10, canBuy: true }],
+      cabin: before.cabin.map((item) => (item.item === 'repair' ? { ...item, level: 1 } : item)),
     });
     expect(readState(step(repaired, noCommands)).countdown).toBe(readState(step(hurt, noCommands)).countdown);
   });
@@ -1333,6 +1347,136 @@ describe('the Cabin', () => {
     const repaired = applyCabinAction(afterFight(30), buyRepair);
     expect(repairOf(repaired).level).toBe(1);
 
-    expect(readState(createWorld(1, shop(30))).cabin).toEqual([{ item: 'repair', level: 0, highestLevel: null, nextPrice: 10, canBuy: false }]);
+    expect(readState(createWorld(1, shop(30))).cabin).toEqual(noPurchases);
+  });
+});
+
+describe('Upgrades', () => {
+  const buy = (world: World, item: CabinItemName, times = 1) => {
+    for (let i = 0; i < times; i++) world = applyCabinAction(world, { type: 'buy', item });
+    return world;
+  };
+  const itemOf = (world: World, item: CabinItemName) => readState(world).cabin.find((entry) => entry.item === item)!;
+  /**
+   * One still enemy per Wave, worth the given Gold, that the player's first Arrow sinks. Its Arrows take off
+   * the given health each. There is no regen unless it is bought.
+   */
+  const rich = (enemyArrowDamage: number, gold = 1000, base: Config = still) =>
+    withClasses({ ...base, regenRate: 0 }, { arrowDamage: 10 }, { health: 10, arrowDamage: enemyArrowDamage, gold });
+  /** Plays until the player has Gold and, if the enemy's Arrows hurt, has taken a hit. */
+  const wealthy = (config: Config) =>
+    until(untilSpawned(createWorld(1, config)), (state) => state.gold > 0 && state.player.health <= 100 - config.vesselClasses.enemyDinghy.arrowDamage);
+  const { cabin } = defaultConfig;
+
+  it('lower Gold by the price of each level in turn, go up one level and show the next price', () => {
+    const start = wealthy(rich(0));
+    const expected = {
+      maxHealth: [30, 60, 120],
+      regen: [25, 50, 100],
+      arrowRate: [20, 40, 80],
+      volleySize: [30, 60, 120, 240],
+    } satisfies Partial<Record<CabinItemName, number[]>>;
+
+    for (const [item, prices] of Object.entries(expected) as [CabinItemName, number[]][]) {
+      let world = start;
+      for (const [level, price] of prices.entries()) {
+        expect(itemOf(world, item)).toMatchObject({ level, highestLevel: prices.length, nextPrice: price, canBuy: true });
+        const gold = readState(world).gold;
+        world = buy(world, item);
+        expect(readState(world).gold).toBe(gold - price);
+      }
+      expect(itemOf(world, item)).toMatchObject({ level: prices.length, nextPrice: null, canBuy: false });
+    }
+  });
+
+  it('raise max and current health by 25% of the class max health per level', () => {
+    const hurt = wealthy(rich(30));
+    expect(readState(hurt).player).toMatchObject({ health: 70, maxHealth: 100 });
+
+    for (const level of [1, 2, 3]) {
+      expect(readState(buy(hurt, 'maxHealth', level)).player).toMatchObject({ health: 70 + 25 * level, maxHealth: 100 + 25 * level });
+    }
+  });
+
+  it('let a Repair heal 25% of the upgraded max health', () => {
+    const upgraded = buy(wealthy(rich(30)), 'maxHealth');
+    const hurt = until(upgraded, (state) => state.player.health < 95);
+    expect(readState(hurt).player).toMatchObject({ health: 65, maxHealth: 125 });
+
+    expect(readState(buy(hurt, 'repair')).player.health).toBe(65 + 125 * 0.25);
+  });
+
+  it('add 1% of max health per second to regen per level', () => {
+    // Regen starts straight after a hit, so the only difference between the two worlds is the Upgrade.
+    const hurt = wealthy(rich(30, 1000, { ...still, regenDelaySeconds: 0 }));
+    const healthAfterHalfASecond = (world: World) => readState(run(world, noCommands, 30)).player.health;
+
+    for (const level of [1, 2, 3]) {
+      const gained = healthAfterHalfASecond(buy(hurt, 'regen', level)) - healthAfterHalfASecond(hurt);
+      expect(gained).toBeCloseTo(level * cabin.regen.regenRate * 100 * 0.5);
+    }
+  });
+
+  /** The ticks, counted from the next Wave's spawn, on which the player Crew fires, and how many Arrows each time. */
+  const volleysAfterSpawn = (world: World) => {
+    const { wave } = readState(world);
+    let next = until(world, (state) => state.wave > wave && state.waveStatus === 'fighting');
+    const volleys: { tick: number; arrows: number }[] = [];
+    for (let tick = 1; tick <= 120; tick++) {
+      next = step(next, noCommands);
+      const fired = arrowsOf(readState(next), 'player').filter((arrow) => arrow.flown === 0).length;
+      if (fired > 0) volleys.push({ tick, arrows: fired });
+    }
+    return volleys;
+  };
+
+  it('shorten the time between Volleys to the configured time at each level', () => {
+    const start = wealthy(rich(0));
+    const gap = (world: World) => {
+      const [first, second] = volleysAfterSpawn(world);
+      return second.tick - first.tick;
+    };
+
+    expect(gap(start)).toBe(60);
+    for (const level of [1, 2, 3]) {
+      expect(gap(buy(start, 'arrowRate', level))).toBe(Math.round(cabin.arrowRate.volleySeconds[level - 1] * 60));
+    }
+  });
+
+  it('add 1 Arrow to each Volley per level, from 1 up to 5', () => {
+    const start = wealthy(rich(0));
+
+    for (const level of [0, 1, 2, 3, 4]) {
+      expect(volleysAfterSpawn(buy(start, 'volleySize', level))[0].arrows).toBe(1 + level);
+    }
+  });
+
+  it("are refused when the player can't afford the next level, leaving the world unchanged", () => {
+    const poor = wealthy(rich(0, 25));
+    expect(readState(poor).gold).toBe(25);
+
+    for (const item of ['maxHealth', 'volleySize'] as const) {
+      expect(itemOf(poor, item).canBuy).toBe(false);
+      expect(buy(poor, item)).toBe(poor);
+    }
+    expect(readState(buy(poor, 'regen')).gold).toBe(0);
+  });
+
+  it('are refused once maxed, leaving the world unchanged', () => {
+    const start = wealthy(rich(0));
+
+    for (const [item, levels] of [['maxHealth', 3], ['regen', 3], ['arrowRate', 3], ['volleySize', 4]] as const) {
+      const maxed = buy(start, item, levels);
+      expect(buy(maxed, item)).toBe(maxed);
+    }
+  });
+
+  it('are all back at level 0 in a new Run', () => {
+    const upgraded = buy(buy(wealthy(rich(0)), 'maxHealth'), 'volleySize');
+    expect(itemOf(upgraded, 'maxHealth').level).toBe(1);
+
+    const fresh = createWorld(1, rich(0));
+    expect(readState(fresh).cabin.map(({ level }) => level)).toEqual([0, 0, 0, 0, 0]);
+    expect(readState(fresh).player.maxHealth).toBe(100);
   });
 });

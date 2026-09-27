@@ -8,6 +8,10 @@ interface CabinItemText {
 
 const cabinItems: Record<CabinItemName, CabinItemText> = {
   repair: { name: 'Repair', next: (config) => `+${config.cabin.repair.healShare * 100}% of max health` },
+  maxHealth: { name: 'Max health', next: (config) => `+${config.cabin.maxHealth.healthShare * 100}% of base max health` },
+  regen: { name: 'Regen', next: (config) => `+${config.cabin.regen.regenRate * 100}% of max health per second` },
+  arrowRate: { name: 'Arrow rate', next: (config, level) => `a Volley every ${config.cabin.arrowRate.volleySeconds[level]} s` },
+  volleySize: { name: 'Volley size', next: (config) => `+${config.cabin.volleySize.arrows} Arrow per Volley` },
 };
 
 /** The game's UI text, in English. Words follow CONTEXT.md. */

@@ -65,7 +65,7 @@ export interface Config {
   wizardFireballCooldownSeconds: number;
   /** Losing a Wizard vessel credits this many times its class's Gold. */
   wizardVesselGoldMultiplier: number;
-  /** The player vessel regains this fraction of its max health each second, once regen has started. */
+  /** The player vessel regains this fraction of its max health each second, once regen has started, before any regen Upgrade. */
   regenRate: number;
   /** How long after the last damage the player vessel starts to regenerate, in seconds. */
   regenDelaySeconds: number;
@@ -91,6 +91,14 @@ export interface Config {
   cabin: {
     /** Restores this share of the player vessel's max health, up to max. */
     repair: CabinItemConfig & { healShare: number };
+    /** Each level adds this share of the vessel class's max health, to max and current health alike. */
+    maxHealth: CabinItemConfig & { healthShare: number };
+    /** Each level adds this fraction of max health a second to the regen rate. */
+    regen: CabinItemConfig & { regenRate: number };
+    /** The time between the player Crew's Volleys at each level from 1, in seconds. Level 0 is volleySeconds. */
+    arrowRate: CabinItemConfig & { volleySeconds: number[] };
+    /** Each level adds this many Arrows to the player Crew's Volleys. */
+    volleySize: CabinItemConfig & { arrows: number };
   };
 }
 
@@ -100,7 +108,7 @@ export interface CabinItemConfig {
 }
 
 /** The items the player can buy in the Cabin, in the order the Cabin lists them. */
-export type CabinItemName = 'repair';
+export type CabinItemName = 'repair' | 'maxHealth' | 'regen' | 'arrowRate' | 'volleySize';
 
 /** One Cabin item as the player sees it, so the view works out no rules of its own. */
 export interface CabinItem {
@@ -268,13 +276,15 @@ export interface Commands {
   throwFireball?: boolean;
 }
 
+export type CabinLevels = Readonly<Record<CabinItemName, number>>;
+
 export interface World {
   readonly seed: number;
   readonly config: Config;
   /** The state without the Cabin items, which readState works out from the levels. */
   readonly state: Omit<WorldState, 'cabin'>;
   /** The levels bought of each Cabin item in this Run. */
-  readonly cabinLevels: Readonly<Record<CabinItemName, number>>;
+  readonly cabinLevels: CabinLevels;
   /** Ticks spent falling or sinking so far. */
   readonly endingTicks: number;
   /** Ticks left before the Wave spawns. */
@@ -296,7 +306,7 @@ export function createWorld(seed: number, config: Config): World {
     random: seed,
     nextId: 1,
     touching: [],
-    cabinLevels: { repair: 0 },
+    cabinLevels: { repair: 0, maxHealth: 0, regen: 0, arrowRate: 0, volleySize: 0 },
     state: {
       player: newVessel(0, 'smallDinghy', 0, 0, 0, config),
       enemies: [],
@@ -363,9 +373,12 @@ interface CabinRule {
   repeatable: boolean;
   /** Whether the next level would change anything for the player vessel now. */
   useful(player: Vessel, config: Config): boolean;
-  /** The player vessel once the next level is bought. */
-  apply(player: Vessel, config: Config): Vessel;
+  /** The player vessel once the next level is bought, given the levels with that one included. */
+  apply(player: Vessel, config: Config, levels: CabinLevels): Vessel;
 }
+
+/** A levelled Upgrade whose effect step reads from the levels, through playerStats. */
+const upgrade: CabinRule = { repeatable: false, useful: () => true, apply: (player) => player };
 
 const cabinRules: Record<CabinItemName, CabinRule> = {
   repair: {
@@ -376,7 +389,33 @@ const cabinRules: Record<CabinItemName, CabinRule> = {
       health: Math.min(player.maxHealth, player.health + player.maxHealth * config.cabin.repair.healShare),
     }),
   },
+  maxHealth: {
+    ...upgrade,
+    // Current health rises by as much as max health does.
+    apply: (player, config, levels) => {
+      const { maxHealth } = playerStats(player.vesselClass, levels, config);
+      return { ...player, maxHealth, health: player.health + maxHealth - player.maxHealth };
+    },
+  },
+  regen: upgrade,
+  arrowRate: upgrade,
+  volleySize: upgrade,
 };
+
+/**
+ * The player vessel's stats: its class stats with the Upgrade levels applied. A vessel of another class
+ * gets the same levels applied to its own class stats.
+ */
+function playerStats(vesselClass: VesselClassName, levels: CabinLevels, config: Config) {
+  const { cabin } = config;
+  const stats = config.vesselClasses[vesselClass];
+  return {
+    maxHealth: stats.health * (1 + levels.maxHealth * cabin.maxHealth.healthShare),
+    regenRate: config.regenRate + levels.regen * cabin.regen.regenRate,
+    volleySeconds: levels.arrowRate === 0 ? config.volleySeconds : cabin.arrowRate.volleySeconds[levels.arrowRate - 1],
+    volleySize: stats.volleySize + levels.volleySize * cabin.volleySize.arrows,
+  };
+}
 
 function cabinItem(world: World, item: CabinItemName): CabinItem {
   const { state, config } = world;
@@ -397,12 +436,13 @@ export function applyCabinAction(world: World, action: CabinAction): World {
   const { item } = action;
   const { canBuy, nextPrice } = cabinItem(world, item);
   if (!canBuy || nextPrice === null) return world;
+  const cabinLevels = { ...world.cabinLevels, [item]: world.cabinLevels[item] + 1 };
   return {
     ...world,
-    cabinLevels: { ...world.cabinLevels, [item]: world.cabinLevels[item] + 1 },
+    cabinLevels,
     state: {
       ...world.state,
-      player: cabinRules[item].apply(world.state.player, world.config),
+      player: cabinRules[item].apply(world.state.player, world.config, cabinLevels),
       gold: world.state.gold - nextPrice,
     },
   };
@@ -430,10 +470,10 @@ export function step(world: World, commands: Commands): World {
       .filter((enemy) => enemy.health > 0)
       .map((enemy) => sail(enemy, enemyCommands(enemy, state.player, config), config)),
   ];
-  regenerate(moved[0], config);
+  regenerate(moved[0], playerStats(moved[0].vesselClass, world.cabinLevels, config).regenRate);
   const touching = ram(moved, world.touching, config, events);
   const afloat = pushApart(moved, config).map((vessel) => feelRimCurrent(vessel, config));
-  const arrows = [...flyArrows(state.arrows, afloat, config, events), ...fireVolleys(afloat, config)];
+  const arrows = [...flyArrows(state.arrows, afloat, config, events), ...fireVolleys(afloat, world.cabinLevels, config)];
   const flying = flyFireballs(state.fireballs, afloat, config, events);
 
   const [player, ...enemies] = afloat;
@@ -477,12 +517,12 @@ export function step(world: World, commands: Commands): World {
 }
 
 /** The player vessel regains health once the regen delay after its last damage has run out. */
-function regenerate(player: Vessel, config: Config): void {
+function regenerate(player: Vessel, regenRate: number): void {
   if (player.regenDelayTicks > 0) {
     player.regenDelayTicks--;
     return;
   }
-  player.health = Math.min(player.maxHealth, player.health + player.maxHealth * config.regenRate * TICK_SECONDS);
+  player.health = Math.min(player.maxHealth, player.health + player.maxHealth * regenRate * TICK_SECONDS);
 }
 
 /**
@@ -619,8 +659,9 @@ function distanceToSegment(point: Vector, start: Vector, dx: number, dy: number)
 /**
  * Each Crew whose Volley is ready fires it at the closest vessel on the other side within Arrow range,
  * aimed where that vessel will be when the Arrow gets there. The Arrows fan out evenly around the aim.
+ * The player Crew's Volley size and time between Volleys have the Upgrade levels applied.
  */
-function fireVolleys(vessels: Vessel[], config: Config): Arrow[] {
+function fireVolleys(vessels: Vessel[], levels: CabinLevels, config: Config): Arrow[] {
   const fired: Arrow[] = [];
   for (const vessel of vessels) {
     if (vessel.health === 0) continue;
@@ -632,13 +673,17 @@ function fireVolleys(vessels: Vessel[], config: Config): Arrow[] {
       config.arrowRange,
     );
     if (!target) continue;
-    const { volleySize, arrowDamage } = config.vesselClasses[vessel.vesselClass];
+    const { arrowDamage } = config.vesselClasses[vessel.vesselClass];
+    const { volleySize, volleySeconds } =
+      sideOf(vessel) === 'player'
+        ? playerStats(vessel.vesselClass, levels, config)
+        : { volleySize: config.vesselClasses[vessel.vesselClass].volleySize, volleySeconds: config.volleySeconds };
     const aim = leadAim(vessel, target, config);
     for (let i = 0; i < volleySize; i++) {
       const heading = aim + (i - (volleySize - 1) / 2) * config.volleySpread;
       fired.push({ side: sideOf(vessel), x: vessel.x, y: vessel.y, heading, damage: arrowDamage, flown: 0 });
     }
-    vessel.volleyTicks = ticksFor(config.volleySeconds);
+    vessel.volleyTicks = ticksFor(volleySeconds);
   }
   return fired;
 }
