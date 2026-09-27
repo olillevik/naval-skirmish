@@ -4,7 +4,7 @@ import { openGame, startRun } from './helpers';
 test('the dinghy starts in the centre of the Arena', async ({ page }) => {
   await startRun(page);
 
-  const dinghy = await page.evaluate(() => window.navalSkirmishTest!.state.dinghy);
+  const dinghy = await page.evaluate(() => window.navalSkirmishTest!.state.player);
 
   expect(dinghy).toMatchObject({ x: 0, y: 0, speed: 0, throttle: 0 });
 });
@@ -38,11 +38,11 @@ for (const [name, throttleKey, rightKey] of [
     await page.keyboard.down(throttleKey);
     await page.waitForTimeout(500);
     await page.keyboard.up(throttleKey);
-    const afterThrottle = await page.evaluate(() => window.navalSkirmishTest!.state.dinghy);
+    const afterThrottle = await page.evaluate(() => window.navalSkirmishTest!.state.player);
     await page.keyboard.down(rightKey);
     await page.waitForTimeout(500);
     await page.keyboard.up(rightKey);
-    const afterTurn = await page.evaluate(() => window.navalSkirmishTest!.state.dinghy);
+    const afterTurn = await page.evaluate(() => window.navalSkirmishTest!.state.player);
 
     expect(afterThrottle.throttle).toBeGreaterThan(0);
     expect(afterThrottle.y).toBeLessThan(0);
@@ -58,13 +58,13 @@ test('the dinghy ignores the keyboard until the start screen is clicked', async 
   await page.keyboard.down('KeyW');
   await page.waitForTimeout(300);
   await page.keyboard.up('KeyW');
-  const beforeStart = await page.evaluate(() => window.navalSkirmishTest!.state.dinghy);
+  const beforeStart = await page.evaluate(() => window.navalSkirmishTest!.state.player);
   await page.getByTestId('start-screen').click();
   await expect(page.getByTestId('start-screen')).toBeHidden();
   await page.keyboard.down('KeyW');
   await page.waitForTimeout(300);
   await page.keyboard.up('KeyW');
-  const afterStart = await page.evaluate(() => window.navalSkirmishTest!.state.dinghy);
+  const afterStart = await page.evaluate(() => window.navalSkirmishTest!.state.player);
 
   expect(beforeStart.throttle).toBe(0);
   expect(afterStart.throttle).toBeGreaterThan(0);
@@ -101,7 +101,7 @@ test('sailing over the Edge ends the Run, and a new Run resets the dinghy', asyn
   await expect(warning).toBeHidden();
 
   await page.keyboard.down('KeyW');
-  await page.waitForFunction(() => window.navalSkirmishTest!.state.pastPointOfNoReturn, null, { timeout: 30_000 });
+  await page.waitForFunction(() => window.navalSkirmishTest!.state.player.pastPointOfNoReturn, null, { timeout: 30_000 });
   await expect(warning).toBeVisible();
   await expect(gameOver).toBeVisible({ timeout: 10_000 });
   await page.keyboard.up('KeyW');
@@ -114,5 +114,5 @@ test('sailing over the Edge ends the Run, and a new Run resets the dinghy', asyn
   await expect(warning).toBeHidden();
   const state = await page.evaluate(() => window.navalSkirmishTest!.state);
   expect(state.run).toBe('sailing');
-  expect(state.dinghy).toEqual({ x: 0, y: 0, heading: 0, speed: 0, throttle: 0 });
+  expect(state.player).toMatchObject({ x: 0, y: 0, heading: 0, speed: 0, throttle: 0 });
 });

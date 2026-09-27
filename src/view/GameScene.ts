@@ -71,9 +71,9 @@ export class GameScene extends Scene {
       }
     }
 
-    const { run, pastPointOfNoReturn, dinghy } = readState(this.world);
-    this.edgeWarning.hidden = !pastPointOfNoReturn || run === 'ended';
-    this.touch.showThrottle(dinghy.throttle);
+    const { run, player } = readState(this.world);
+    this.edgeWarning.hidden = !player.pastPointOfNoReturn || run === 'ended';
+    this.touch.showThrottle(player.throttle);
     // Once the dinghy has crossed the Edge, the fall animation owns its scale, alpha and rotation.
     if (!this.fall) this.draw();
     if (run !== 'sailing' && !this.fall) {
@@ -171,7 +171,7 @@ export class GameScene extends Scene {
   }
 
   private draw(): void {
-    const { x, y, heading } = readState(this.world).dinghy;
+    const { x, y, heading } = readState(this.world).player;
     this.dinghy.setPosition(x, y).setRotation(heading + SPRITE_ROTATION);
   }
 }

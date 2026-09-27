@@ -31,7 +31,7 @@ test('a refused fullscreen request does not stop the Run from starting', async (
   await page.waitForTimeout(300);
   await page.keyboard.up('KeyW');
 
-  expect((await page.evaluate(() => window.navalSkirmishTest!.state.dinghy)).throttle).toBeGreaterThan(0);
+  expect((await page.evaluate(() => window.navalSkirmishTest!.state.player)).throttle).toBeGreaterThan(0);
 });
 
 type Point = { x: number; y: number };
@@ -62,7 +62,7 @@ async function touchscreen(page: Page) {
   };
 }
 
-const dinghy = (page: Page) => page.evaluate(() => window.navalSkirmishTest!.state.dinghy);
+const dinghy = (page: Page) => page.evaluate(() => window.navalSkirmishTest!.state.player);
 
 async function box(page: Page, testId: string) {
   const found = await page.getByTestId(testId).boundingBox();
@@ -158,6 +158,6 @@ test('tapping New Run after falling off the Edge starts a fresh Run', async ({ p
   await page.getByTestId('new-run').tap();
 
   await expect(page.getByTestId('game-over')).toBeHidden();
-  expect(await dinghy(page)).toEqual({ x: 0, y: 0, heading: 0, speed: 0, throttle: 0 });
+  expect(await dinghy(page)).toMatchObject({ x: 0, y: 0, heading: 0, speed: 0, throttle: 0 });
   await expect(page.getByTestId('throttle-value')).toHaveText('0%');
 });
