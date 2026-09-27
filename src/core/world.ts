@@ -108,10 +108,6 @@ export interface Config {
     fireballDamage: CabinItemConfig & { damage: number[] };
     /** The Captain's Fireball cooldown at each level from 1, in seconds. Level 0 is fireballCooldownSeconds. */
     fireballCooldown: CabinItemConfig & { cooldownSeconds: number[] };
-    /** Each unlocks the Targeting rule of the same name. */
-    farthest: CabinItemConfig;
-    lowestHealth: CabinItemConfig;
-    highestHealth: CabinItemConfig;
     /** Swaps the player vessel for a smallShip. */
     smallShip: CabinItemConfig;
   };
@@ -132,7 +128,6 @@ export type CabinItemName =
   | 'flamingArrows'
   | 'fireballDamage'
   | 'fireballCooldown'
-  | Exclude<TargetingRule, 'closest'>
   | 'smallShip';
 
 /** One Cabin item as the player sees it, so the view works out no rules of its own. */
@@ -245,13 +240,11 @@ export interface Fireball {
 
 /**
  * How the Captain picks the enemy a Fireball goes for, among the enemies within Fireball range. Ties go to the
- * closest. A Run starts owning only closest. The Cabin sells the others, each unlocked by the item of the same name.
+ * closest. All four are free and the player can pick any of them in the Cabin.
  */
 export type TargetingRule = 'closest' | 'farthest' | 'lowestHealth' | 'highestHealth';
 
 const targetingRules: TargetingRule[] = ['closest', 'farthest', 'lowestHealth', 'highestHealth'];
-
-const ownsRule = (levels: CabinLevels, rule: TargetingRule) => rule === 'closest' || levels[rule] > 0;
 
 /** Something that happened during the last tick, for the view's effects. */
 export type WorldEvent =
@@ -287,7 +280,7 @@ export interface WorldState {
   fireballs: Fireball[];
   /** The active Targeting rule. It stays until the player sets another in the Cabin. */
   targetingRule: TargetingRule;
-  /** The Targeting rules the player owns, in the order the Cabin lists them. */
+  /** Every Targeting rule, in the order the Cabin lists them. */
   targetingRules: TargetingRule[];
   /** The enemy the Targeting rule picks within Fireball range after the last tick, or null when there is none. */
   fireballTargetId: number | null;
@@ -326,7 +319,7 @@ export type CabinLevels = Readonly<Record<CabinItemName, number>>;
 export interface World {
   readonly seed: number;
   readonly config: Config;
-  /** The state without the Cabin items and the owned Targeting rules, which readState works out from the levels. */
+  /** The state without the Cabin items, which readState works out from the levels, and the Targeting rules. */
   readonly state: Omit<WorldState, 'cabin' | 'targetingRules'>;
   /** The levels bought of each Cabin item in this Run. */
   readonly cabinLevels: CabinLevels;
@@ -353,11 +346,7 @@ export function createWorld(seed: number, config: Config): World {
     touching: [],
     cabinLevels: {
       repair: 0, maxHealth: 0, regen: 0, arrowRate: 0, volleySize: 0, flamingArrows: 0, fireballDamage: 0,
-      fireballCooldown: 0,
-      farthest: 0,
-      lowestHealth: 0,
-      highestHealth: 0,
-      smallShip: 0,
+      fireballCooldown: 0, smallShip: 0,
     },
     state: {
       player: newVessel(0, 'smallDinghy', 0, 0, 0, config),
@@ -419,8 +408,7 @@ export function readState(world: World): WorldState {
   const cabin = (Object.keys(cabinRules) as CabinItemName[])
     .filter((item) => cabinRules[item].shown?.(world.state.player) ?? true)
     .map((item) => cabinItem(world, item));
-  const owned = targetingRules.filter((rule) => ownsRule(world.cabinLevels, rule));
-  return { ...world.state, targetingRules: owned, cabin };
+  return { ...world.state, targetingRules, cabin };
 }
 
 /** The Cabin rules for each item. Tuning numbers stay in the config. */
@@ -461,9 +449,6 @@ const cabinRules: Record<CabinItemName, CabinRule> = {
   flamingArrows: upgrade,
   fireballDamage: upgrade,
   fireballCooldown: upgrade,
-  farthest: upgrade,
-  lowestHealth: upgrade,
-  highestHealth: upgrade,
   smallShip: {
     repeatable: false,
     useful: () => true,
@@ -507,13 +492,12 @@ function cabinItem(world: World, item: CabinItemName): CabinItem {
 
 /**
  * Applies what the player does in the Cabin, with no time passing. An action that isn't allowed, such as
- * one without enough Gold, a Targeting rule the player doesn't own, or any action once the player vessel
+ * one without enough Gold, or any action once the player vessel
  * is no longer afloat, returns the world unchanged.
  */
 export function applyCabinAction(world: World, action: CabinAction): World {
   if (action.type === 'setTargetingRule') {
-    const allowed = world.state.run === 'sailing' && ownsRule(world.cabinLevels, action.rule);
-    return allowed ? { ...world, state: { ...world.state, targetingRule: action.rule } } : world;
+    return world.state.run === 'sailing' ? { ...world, state: { ...world.state, targetingRule: action.rule } } : world;
   }
   const { item } = action;
   const { canBuy, nextPrice } = cabinItem(world, item);

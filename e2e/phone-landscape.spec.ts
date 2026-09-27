@@ -207,3 +207,16 @@ test('the Cabin button opens the Cabin, which freezes the world, and the close b
   await expect(cabin).toBeHidden();
   await expect.poll(async () => (await state()).countdown).toBeLessThan(opened.countdown);
 });
+
+test('the Cabin shows both sections, and a Targeting rule can be tapped', async ({ page }) => {
+  await startRun(page, 'tap');
+  await page.getByTestId('cabin-button').tap();
+
+  await expect(page.getByTestId('cabin-rules-section').getByRole('heading')).toBeVisible();
+  await expect(page.getByTestId('cabin-shop').getByRole('heading')).toBeVisible();
+  // Big enough to tap.
+  expect((await box(page, 'rule-highestHealth')).height).toBeGreaterThanOrEqual(44);
+  await page.getByTestId('rule-highestHealth').tap();
+
+  await expect(page.getByTestId('rule-highestHealth')).toHaveAttribute('aria-pressed', 'true');
+});

@@ -1,10 +1,9 @@
 import type { CabinItemName, Config, TargetingRule, VesselClassName } from '../core/world';
 
-/** A Cabin item's name, what its next level gives after the levels already bought, and what it shows once maxed if not "maxed". */
+/** A Cabin item's name, and what its next level gives after the levels already bought. */
 interface CabinItemText {
   name: string;
   next: (config: Config, level: number) => string;
-  maxed?: string;
 }
 
 const targetingRules: Record<TargetingRule, string> = {
@@ -13,12 +12,6 @@ const targetingRules: Record<TargetingRule, string> = {
   lowestHealth: 'lowest health',
   highestHealth: 'highest health',
 };
-
-const targetingRuleItem = (rule: TargetingRule): CabinItemText => ({
-  name: `Targeting rule: ${targetingRules[rule]}`,
-  next: () => 'unlocks the rule',
-  maxed: 'owned',
-});
 
 const cabinItems: Record<CabinItemName, CabinItemText> = {
   repair: { name: 'Repair', next: (config) => `+${config.cabin.repair.healShare * 100}% of max health` },
@@ -35,9 +28,6 @@ const cabinItems: Record<CabinItemName, CabinItemText> = {
     name: 'Fireball cooldown',
     next: (config, level) => `a Fireball every ${config.cabin.fireballCooldown.cooldownSeconds[level]} s`,
   },
-  farthest: targetingRuleItem('farthest'),
-  lowestHealth: targetingRuleItem('lowestHealth'),
-  highestHealth: targetingRuleItem('highestHealth'),
   smallShip: {
     name: 'Small ship',
     next: (config) => {
@@ -69,4 +59,5 @@ export const text = {
   cabinItems,
   targetingRule: 'Targeting rule',
   targetingRules,
+  forSale: 'For sale',
 };

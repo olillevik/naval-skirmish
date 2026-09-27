@@ -173,8 +173,10 @@
       /* Big enough to tap on a phone. */
       #cabin button { min-height: 2.75rem; padding: 0.5rem 1.25rem; }
       #cabin button:disabled { opacity: 0.4; cursor: default; }
-      #cabin-picker { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.5rem 1rem; }
-      #cabin-rules { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+      /* The Targeting rules are free, so they sit apart from the items for sale. */
+      #cabin section { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; width: min(40rem, 100%); }
+      #cabin h2 { margin: 0; font-size: 1.25rem; }
+      #cabin-rules { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.5rem; }
       /* The active Targeting rule. */
       #cabin-rules button[aria-pressed='true'] { color: #0b0e1f; background: #ff9a2e; }
       /* The game is landscape only. A coarse pointer means a phone or tablet, not a narrow desktop window. */
@@ -208,11 +210,14 @@
         <span id="cabin-health" data-testid="cabin-health"></span>
         <span id="cabin-vessel" data-testid="cabin-vessel"></span>
       </p>
-      <p id="cabin-picker">
-        <span id="cabin-rules-label"></span>
-        <span id="cabin-rules" data-testid="cabin-rules"></span>
-      </p>
-      <ul id="cabin-items" data-testid="cabin-items"></ul>
+      <section id="cabin-rules-section" data-testid="cabin-rules-section">
+        <h2 id="cabin-rules-title"></h2>
+        <div id="cabin-rules" data-testid="cabin-rules"></div>
+      </section>
+      <section id="cabin-shop" data-testid="cabin-shop">
+        <h2 id="cabin-shop-title"></h2>
+        <ul id="cabin-items" data-testid="cabin-items"></ul>
+      </section>
       <button id="cabin-close" type="button" data-testid="cabin-close"></button>
     </div>
     <div id="start-screen" class="overlay" data-testid="start-screen">

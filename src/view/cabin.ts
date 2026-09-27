@@ -12,8 +12,8 @@ interface Row {
 }
 
 /**
- * The Cabin overlay: Gold, health and the vessel at the top, then the Targeting rule picker with a button per
- * owned rule, the active one pressed, then a row per Cabin item. It is a page
+ * The Cabin overlay: Gold, health and the vessel at the top, then the Targeting rule section with a button per
+ * rule, the active one pressed, then the section for sale with a row per Cabin item. It is a page
  * element over the paused game, so it works with the mouse and with taps. Its rows come from the
  * world state's item list, so a new item only needs its text.
  */
@@ -33,7 +33,8 @@ export class Cabin {
     onClose: () => void,
   ) {
     document.getElementById('cabin-title')!.textContent = text.cabinTitle;
-    document.getElementById('cabin-rules-label')!.textContent = text.targetingRule;
+    document.getElementById('cabin-rules-title')!.textContent = text.targetingRule;
+    document.getElementById('cabin-shop-title')!.textContent = text.forSale;
     this.rules.addEventListener('click', (event) => {
       const button = (event.target as HTMLElement).closest('button');
       if (button?.dataset.rule) onSetRule(button.dataset.rule as TargetingRule);
@@ -91,7 +92,7 @@ export class Cabin {
   }
 
   private fillRow(row: Row, { level, highestLevel, nextPrice, canBuy }: CabinItem): void {
-    row.level.textContent = nextPrice === null ? (text.cabinItems[row.item].maxed ?? text.maxed) : highestLevel === null ? text.repeatable : text.level(level, highestLevel);
+    row.level.textContent = nextPrice === null ? text.maxed : highestLevel === null ? text.repeatable : text.level(level, highestLevel);
     row.next.textContent = nextPrice === null ? '' : text.cabinItems[row.item].next(this.config, level);
     row.price.textContent = nextPrice === null ? '' : text.price(nextPrice);
     row.buy.disabled = !canBuy;
