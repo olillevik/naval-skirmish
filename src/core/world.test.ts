@@ -40,6 +40,11 @@ const config: Config = {
   fireballCooldownSeconds: 6,
   fireballTurnRate: Math.PI / 2,
   fireballBurnOutSeconds: 3,
+  wizardVesselsFromWave: 3,
+  wizardVesselChance: 0.05,
+  wizardFireballDamage: 25,
+  wizardFireballCooldownSeconds: 10,
+  wizardVesselGoldMultiplier: 3,
   regenRate: 0.01,
   regenDelaySeconds: 3,
   enemyCircleRange: 0.9,
@@ -947,7 +952,8 @@ describe('Gold and the Score', () => {
 
   it('credits Gold for each enemy lost over the Edge, and counts each Wave defeated in the Score', () => {
     // Every spawn point is past the point of no return, so the Rim current takes each Wave over the Edge.
-    const doomed: Config = { ...defaultConfig, waveCountdownSeconds: 1, rimCurrentStart: 0.2, pointOfNoReturn: 0.3 };
+    // No Wizard vessels, which would credit more.
+    const doomed: Config = { ...defaultConfig, waveCountdownSeconds: 1, rimCurrentStart: 0.2, pointOfNoReturn: 0.3, wizardVesselChance: 0 };
     let world = untilSpawned(createWorld(1, doomed));
     const credited: number[] = [];
     for (const wave of [1, 2, 3]) {
@@ -1084,5 +1090,101 @@ describe('ramming', () => {
     }
 
     expect(touched).toBe(true);
+  });
+});
+
+describe('Wizard vessels', () => {
+  /** Every spawn point is past the point of no return, so the Rim current takes each Wave over the Edge. */
+  const doomed: Config = { ...defaultConfig, waveCountdownSeconds: 1, rimCurrentStart: 0.2, pointOfNoReturn: 0.3 };
+  const wizardsIn = (state: WorldState) => state.enemies.filter((enemy) => enemy.wizardVessel).map((enemy) => enemy.id);
+  /** The ids of each Wave's Wizard vessels, from Wave 1. */
+  const wizardsByWave = (seed: number, config: Config, waves: number) => {
+    let world = untilSpawned(createWorld(seed, config));
+    const wizards = [wizardsIn(readState(world))];
+    for (let wave = 2; wave <= waves; wave++) {
+      world = untilSpawned(untilNoEnemies(world));
+      wizards.push(wizardsIn(readState(world)));
+    }
+    return wizards;
+  };
+  /**
+   * One Wizard vessel in every Wave from Wave 1, that never rows and is always in Fireball range. Arrows do no
+   * harm, and the Fireballs fly long enough to reach the farthest spawn point.
+   */
+  const wizard = withClasses(
+    { ...still, fireballRange: 1200, fireballBurnOutSeconds: 10, wizardVesselsFromWave: 1, wizardVesselChance: 1 },
+    { arrowDamage: 0 },
+    { health: 1000, arrowDamage: 0 },
+  );
+  const enemyFireballs = (state: WorldState) => state.fireballs.filter((fireball) => fireball.side === 'enemy');
+
+  it('never come in Waves 1 and 2, and come at most one to a Wave from Wave 3, the same for the same seed', () => {
+    const seen = [];
+    for (let seed = 1; seed <= 20; seed++) {
+      const wizards = wizardsByWave(seed, doomed, 5);
+
+      expect(wizards.slice(0, 2)).toEqual([[], []]);
+      for (const wave of wizards) expect(wave.length).toBeLessThanOrEqual(1);
+      expect(wizardsByWave(seed, doomed, 5)).toEqual(wizards);
+      seen.push(...wizards.flat());
+    }
+    // A 5% chance for each of the 20 enemies in Waves 3 to 5 gives about 13 in 20 seeds a Wizard vessel.
+    expect(seen.length).toBeGreaterThan(0);
+  });
+
+  it('come one to a Wave, never more, even when every enemy has the chance', () => {
+    const wizards = wizardsByWave(1, { ...doomed, wizardVesselChance: 1 }, 5);
+
+    expect(wizards.map((wave) => wave.length)).toEqual([0, 0, 1, 1, 1]);
+  });
+
+  it('throw Fireballs only at the player vessel, with their own damage, on their own cooldown', () => {
+    // The Wizard throws on the tick after the Wave spawns.
+    const thrown = step(untilSpawned(createWorld(1, wizard)), noCommands);
+    const { player, enemies } = readState(thrown);
+
+    expect(enemies[0].wizardVessel).toBe(true);
+    expect(enemyFireballs(readState(thrown))).toEqual([
+      expect.objectContaining({ side: 'enemy', targetId: 0, damage: 25, x: enemies[0].x, y: enemies[0].y }),
+    ]);
+    expect(turnBetween(readState(thrown).fireballs[0].heading, bearingTo(enemies[0], player))).toBeCloseTo(0);
+    // wizardFireballCooldownSeconds is 10 s, which is 600 ticks. The Captain's cooldown is untouched.
+    expect(enemies[0].fireballTicks).toBe(600);
+    expect(player.fireballTicks).toBe(0);
+    const hit = until(thrown, (state) => state.events.some((event) => event.type === 'fireballHit'));
+    expect(readState(hit).events).toContainEqual({ type: 'fireballHit', vesselId: 0, x: expect.any(Number), y: expect.any(Number) });
+    expect(readState(hit).player.health).toBe(75);
+    const thrownAt = (world: World) => enemyFireballs(readState(world)).filter((fireball) => fireball.burnTicks === 600).length;
+    expect(thrownAt(run(thrown, noCommands, 599))).toBe(0);
+    expect(thrownAt(run(thrown, noCommands, 600))).toBe(1);
+  });
+
+  it('throw nothing while the player vessel is out of Fireball range', () => {
+    const tooFar = run(untilSpawned(createWorld(1, { ...wizard, fireballRange: 500 })), noCommands, 60);
+
+    expect(readState(tooFar).fireballs).toEqual([]);
+    expect(readState(tooFar).enemies[0].fireballTicks).toBe(0);
+  });
+
+  it('are the only enemies that throw Fireballs', () => {
+    const crowd = readState(step(untilSpawned(createWorld(1, { ...wizard, waveSizeBase: 3 })), noCommands));
+    const none = readState(run(untilSpawned(createWorld(1, { ...wizard, wizardVesselChance: 0 })), noCommands, 60));
+
+    expect(crowd.enemies).toHaveLength(4);
+    expect(crowd.enemies.filter((enemy) => enemy.wizardVessel)).toHaveLength(1);
+    expect(crowd.enemies.filter((enemy) => enemy.fireballTicks > 0)).toEqual(crowd.enemies.filter((enemy) => enemy.wizardVessel));
+    expect(enemyFireballs(crowd)).toHaveLength(1);
+    expect(none.enemies[0].wizardVessel).toBe(false);
+    expect(none.fireballs).toEqual([]);
+  });
+
+  it("credit 3x their class's Gold when lost", () => {
+    const fragile = withClasses(wizard, { arrowDamage: 10 }, { health: 10, arrowDamage: 0, gold: 7 });
+    const sunk = until(untilSpawned(createWorld(1, fragile)), (state) => state.enemies[0].health === 0);
+    const [wreck] = readState(sunk).enemies;
+
+    expect(wreck.wizardVessel).toBe(true);
+    expect(readState(sunk).gold).toBe(21);
+    expect(readState(sunk).events).toContainEqual({ type: 'goldCredited', vesselId: wreck.id, gold: 21 });
   });
 });

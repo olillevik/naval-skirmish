@@ -43,18 +43,28 @@ export interface Config {
   volleySeconds: number;
   /** The angle between neighbouring Arrows in one Volley, radians. */
   volleySpread: number;
-  /** Health a Fireball takes off the vessel it hits. */
+  /** Health one of the Captain's Fireballs takes off the vessel it hits. */
   fireballDamage: number;
-  /** The Captain only throws a Fireball at an enemy this close, px. */
+  /** The Captain only throws a Fireball at an enemy this close, px, and an enemy Wizard only at the player vessel this close. */
   fireballRange: number;
   /** px/s. */
   fireballSpeed: number;
-  /** The time between one Fireball and the next from the same Wizard, in seconds. */
+  /** The time between one of the Captain's Fireballs and the next, in seconds. */
   fireballCooldownSeconds: number;
   /** How fast a Fireball turns toward its target, radians per second. */
   fireballTurnRate: number;
   /** How long a Fireball that hits nothing flies before it burns out, in seconds. */
   fireballBurnOutSeconds: number;
+  /** The first Wave that can have a Wizard vessel. */
+  wizardVesselsFromWave: number;
+  /** From wizardVesselsFromWave, the chance each enemy has of being a Wizard vessel, until one in the Wave is. */
+  wizardVesselChance: number;
+  /** Health an enemy Wizard's Fireball takes off the player vessel. */
+  wizardFireballDamage: number;
+  /** The time between one of an enemy Wizard's Fireballs and the next, in seconds. */
+  wizardFireballCooldownSeconds: number;
+  /** Losing a Wizard vessel credits this many times its class's Gold. */
+  wizardVesselGoldMultiplier: number;
   /** The player vessel regains this fraction of its max health each second, once regen has started. */
   regenRate: number;
   /** How long after the last damage the player vessel starts to regenerate, in seconds. */
@@ -125,7 +135,9 @@ export interface Vessel {
   maxHealth: number;
   /** Ticks left before the Crew can fire the next Volley. A ready Crew fires as soon as an enemy is in range. */
   volleyTicks: number;
-  /** Ticks left before the Wizard can throw the next Fireball. */
+  /** An enemy vessel with a Wizard aboard, who throws Fireballs at the player vessel. Always false for the player vessel. */
+  wizardVessel: boolean;
+  /** Ticks left before the vessel's Wizard, the Captain on the player vessel, can throw the next Fireball. */
   fireballTicks: number;
   /** Ticks left before regen starts. Only the player vessel regenerates. */
   regenDelayTicks: number;
@@ -291,6 +303,7 @@ function newVessel(
     health,
     maxHealth: health,
     volleyTicks: 0,
+    wizardVessel: false,
     fireballTicks: 0,
     regenDelayTicks: 0,
     sinkingTicks: 0,
@@ -338,7 +351,7 @@ export function step(world: World, commands: Commands): World {
 
   const [player, ...enemies] = afloat;
   const target = closestInRange(player, enemies, config.fireballRange);
-  const fireballs = [...flying, ...throwFireball(player, target, commands, config)];
+  const fireballs = [...flying, ...throwFireball(player, target, commands, config), ...throwWizardFireballs(enemies, player, config)];
   const overEdge = (vessel: Vessel) => Math.hypot(vessel.x, vessel.y) >= config.arenaRadius;
   for (const vessel of afloat) {
     if (vessel.health > 0 && overEdge(vessel)) events.push({ type: 'vesselOverEdge', vesselId: vessel.id });
@@ -352,7 +365,7 @@ export function step(world: World, commands: Commands): World {
       if (event.type !== 'vesselSunk' && event.type !== 'vesselOverEdge') continue;
       const enemy = enemies.find((vessel) => vessel.id === event.vesselId);
       if (!enemy) continue;
-      const credit = config.vesselClasses[enemy.vesselClass].gold;
+      const credit = config.vesselClasses[enemy.vesselClass].gold * (enemy.wizardVessel ? config.wizardVesselGoldMultiplier : 1);
       gold += credit;
       events.push({ type: 'goldCredited', vesselId: enemy.id, gold: credit });
     }
@@ -470,6 +483,30 @@ function throwFireball(player: Vessel, target: Vessel | undefined, commands: Com
   ];
 }
 
+/**
+ * Counts down each enemy Wizard's cooldown. A Wizard whose cooldown is ready throws a Fireball straight at the
+ * player vessel as soon as it is within Fireball range, and the cooldown starts.
+ */
+function throwWizardFireballs(enemies: Vessel[], player: Vessel, config: Config): Fireball[] {
+  const thrown: Fireball[] = [];
+  for (const enemy of enemies) {
+    if (!enemy.wizardVessel || enemy.health === 0) continue;
+    if (enemy.fireballTicks > 0) enemy.fireballTicks--;
+    if (enemy.fireballTicks > 0 || !closestInRange(enemy, [player], config.fireballRange)) continue;
+    enemy.fireballTicks = ticksFor(config.wizardFireballCooldownSeconds);
+    thrown.push({
+      side: 'enemy',
+      x: enemy.x,
+      y: enemy.y,
+      heading: bearing(enemy.x, enemy.y, player.x, player.y),
+      targetId: player.id,
+      damage: config.wizardFireballDamage,
+      burnTicks: ticksFor(config.fireballBurnOutSeconds),
+    });
+  }
+  return thrown;
+}
+
 /** The closest vessel afloat among the others that is within range of the vessel. */
 function closestInRange(vessel: Vessel, others: Vessel[], range: number): Vessel | undefined {
   return others
@@ -545,7 +582,8 @@ function advanceWave(world: World): World {
 /**
  * Wave n has waveSizeBase + n enemy dinghies, and enemy ships from shipsFromWave, at seeded points in the
  * spawn ring, each at least minSpawnDistance from the player vessel and clear of the others, facing the
- * player vessel. Their max health grows by enemyHealthGrowth each Wave.
+ * player vessel. Their max health grows by enemyHealthGrowth each Wave. From wizardVesselsFromWave, each
+ * enemy in turn has wizardVesselChance of being a Wizard vessel, until one is.
  */
 function spawnWave(world: World): World {
   const { state, config } = world;
@@ -560,6 +598,7 @@ function spawnWave(world: World): World {
   const growth = (1 + config.enemyHealthGrowth) ** (wave - 1);
   const radiusOf = (vesselClass: VesselClassName) => config.vesselClasses[vesselClass].radius;
   const enemies: Vessel[] = [];
+  let wizardAboard = false;
   let nextId = world.nextId;
   for (const vesselClass of classes) {
     for (let attempt = 0; ; attempt++) {
@@ -572,7 +611,10 @@ function spawnWave(world: World): World {
       if (Math.hypot(x - player.x, y - player.y) < config.minSpawnDistance) continue;
       if (enemies.some((enemy) => Math.hypot(x - enemy.x, y - enemy.y) < radiusOf(enemy.vesselClass) + radiusOf(vesselClass))) continue;
       const health = config.vesselClasses[vesselClass].health * growth;
-      enemies.push(newVessel(nextId++, vesselClass, x, y, bearing(x, y, player.x, player.y), config, health));
+      const enemy = newVessel(nextId++, vesselClass, x, y, bearing(x, y, player.x, player.y), config, health);
+      enemy.wizardVessel = !wizardAboard && wave >= config.wizardVesselsFromWave && random.next() < config.wizardVesselChance;
+      wizardAboard ||= enemy.wizardVessel;
+      enemies.push(enemy);
       break;
     }
   }

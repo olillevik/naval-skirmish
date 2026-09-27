@@ -44,6 +44,15 @@ const ENEMY_DINGHY_SPRITES = ['enemyDinghy1', 'enemyDinghy2'];
 const ENEMY_MARK_COLOUR = 0xd62f2f;
 /** The ring is a little wider than the collision circle, so it shows around the hull. */
 const ENEMY_MARK_SCALE = 1.4;
+/**
+ * A Wizard vessel has a purple ring under its hull, wider than the red mark, that pulses so it catches the eye,
+ * and a flag that stands upright beside its health bar, so it can be told apart by shape as well as colour.
+ * The flag is the pack's plain flag, tinted purple.
+ */
+const WIZARD_COLOUR = 0xa64dff;
+const WIZARD_GLOW_SCALE = 1.8;
+const WIZARD_GLOW_PULSE_MS = 800;
+const WIZARD_FLAG_SCALE = 2;
 /** A dinghy below this share of its max health shows fire, since the pack has no damaged dinghy sprites. */
 const FIRE_BELOW = 0.4;
 /** Small enough that the hull shows around the flames. */
@@ -75,6 +84,8 @@ interface VesselSprite {
   sinking: boolean;
   /** A ship's hull textures, from whole to wreck. Dinghies have none, and show fire instead. */
   damageStates?: string[];
+  /** A Wizard vessel's glow ring and flag. */
+  wizard?: { glow: GameObjects.Arc; flag: GameObjects.Image };
 }
 
 type Keys = Record<'W' | 'A' | 'S' | 'D' | 'UP' | 'DOWN' | 'LEFT' | 'RIGHT', Input.Keyboard.Key>;
@@ -118,6 +129,7 @@ export class GameScene extends Scene {
     this.load.image('enemyDinghy2', `${base}assets/dinghySmall3.png`);
     this.load.image('water', `${base}assets/tile_73.png`);
     this.load.image('fire', `${base}assets/fire1.png`);
+    this.load.image('wizardFlag', `${base}assets/flag1.png`);
     for (const frame of EXPLOSION_FRAMES) this.load.image(frame, `${base}assets/${frame}.png`);
     for (const texture of ENEMY_SHIP_COLOURS.flatMap(shipDamageStates)) this.load.image(texture, `${base}assets/${texture}.png`);
   }
@@ -317,6 +329,7 @@ export class GameScene extends Scene {
       let sprite = this.enemies.get(enemy.id);
       if (!sprite) {
         sprite = enemy.vesselClass === 'enemyShip' ? this.addShipSprite(enemy) : this.addEnemyDinghySprite(enemy);
+        if (enemy.wizardVessel) this.addWizardMarks(sprite, enemy);
         this.enemies.set(enemy.id, sprite);
       }
       this.drawVessel(sprite, enemy);
@@ -336,6 +349,16 @@ export class GameScene extends Scene {
     return { ...this.addVesselSprite(damageStates[0], 1), damageStates };
   }
 
+  /** The glow ring goes under everything else in the vessel, and the flag over it. */
+  private addWizardMarks(sprite: VesselSprite, enemy: Vessel): void {
+    const radius = defaultConfig.vesselClasses[enemy.vesselClass].radius * WIZARD_GLOW_SCALE;
+    const glow = this.add.circle(0, 0, radius, WIZARD_COLOUR, 0.3).setStrokeStyle(4, WIZARD_COLOUR);
+    const flag = this.add.image(0, 0, 'wizardFlag').setScale(WIZARD_FLAG_SCALE).setOrigin(0.5, 1).setTint(WIZARD_COLOUR);
+    sprite.body.addAt(glow, 0);
+    sprite.body.add(flag);
+    sprite.wizard = { glow, flag };
+  }
+
   private addVesselSprite(texture: string, scale = DINGHY_SCALE): VesselSprite {
     const hull = this.add.image(0, 0, texture).setScale(scale);
     const fire = this.add.image(0, 0, 'fire').setScale(FIRE_SCALE).setVisible(false);
@@ -349,6 +372,18 @@ export class GameScene extends Scene {
     const burning = sprite.damageStates ? vessel.health === 0 : vessel.health < vessel.maxHealth * FIRE_BELOW;
     // The flames stay upright on the screen as the hull turns.
     sprite.fire.setVisible(burning).setRotation(-sprite.body.rotation);
+    if (sprite.wizard) this.drawWizardMarks(sprite.wizard, sprite.body.rotation, vessel);
+  }
+
+  /** The glow pulses with the clock. The flag stays upright on the screen, to the right of the health bar. */
+  private drawWizardMarks({ glow, flag }: NonNullable<VesselSprite['wizard']>, rotation: number, vessel: Vessel): void {
+    const pulse = (1 + Math.sin((this.time.now / WIZARD_GLOW_PULSE_MS) * Math.PI * 2)) / 2;
+    glow.setAlpha(0.5 + pulse * 0.5).setScale(0.9 + pulse * 0.2);
+    // The flag is in the vessel's container, so its place on the screen is turned back by the vessel's rotation.
+    const x = HEALTH_BAR_WIDTH / 2 + 6;
+    const y = -defaultConfig.vesselClasses[vessel.vesselClass].radius * HEALTH_BAR_OFFSET + HEALTH_BAR_HEIGHT;
+    const [cos, sin] = [Math.cos(-rotation), Math.sin(-rotation)];
+    flag.setPosition(x * cos - y * sin, x * sin + y * cos).setRotation(-rotation);
   }
 
   private drawHealthBar({ x, y, health, maxHealth, vesselClass }: Vessel): void {
