@@ -20,7 +20,7 @@ export const defaultConfig: Config = {
   volleySeconds: 1,
   volleySpread: 0.1,
   cannonRange: 350,
-  cannonSpeed: 350,
+  cannonSpeed: 250,
   cannonDamage: 10,
   cannonReloadSeconds: 3,
   cannonSpread: 0.1,
