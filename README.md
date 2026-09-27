@@ -4,6 +4,8 @@ A top-down browser game about steering a small dinghy across a round magical sea
 
 Right now you can sail the dinghy around the Arena with the keyboard or, on a phone, by touch. Tap or click the start screen to begin a Run. On a phone, the tap also asks the browser for fullscreen, and the game asks you to turn the phone to landscape. W or ↑ raises the throttle, S or ↓ lowers it, and A/D or ←/→ turn. The throttle stays where you leave it. A ring on the water marks where the Rim current starts pulling the dinghy toward the Edge. A warning shows once the pull is too strong to row against, and a dinghy that crosses the Edge falls into space and ends the Run. On a touch screen, a throttle lever on the right edge sets the throttle directly and shows its value. Dragging sideways anywhere on the left half steers, harder the further you drag, and the dinghy goes straight again when you lift your thumb. Both thumbs work at once.
 
+A Run starts with a 5-second countdown, and then Wave 1 arrives. Wave n has 2 + n enemy dinghies, drawn over a red ring. They sail at your dinghy and circle it at about Arrow range, and they turn back before the Rim current. Nothing shoots yet, so the only way to clear a Wave is to sail into enemies and push them over the Edge. When a Wave has no enemies left, the next countdown starts. The Wave number and the countdown show at the top left.
+
 ## Run it
 
 You need Node.js 22.12 or newer (CI uses Node.js 24). Install the dependencies once with `npm install`, then run `npm run dev` and open the URL Vite prints (it ends in `/naval-skirmish/`).

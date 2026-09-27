@@ -92,7 +92,20 @@ test('there are no touch controls on desktop', async ({ page }) => {
   await expect(page.getByTestId('steering-area')).toBeHidden();
 });
 
-test('sailing over the Edge ends the Run, and a new Run resets the dinghy', async ({ page }) => {
+test('the HUD counts down to Wave 1, which then spawns', async ({ page }) => {
+  await startRun(page);
+  const countdown = page.getByTestId('countdown');
+
+  await expect(page.getByTestId('wave')).toHaveText('Wave 1');
+  await expect(countdown).toHaveText(/^starts in [45]$/);
+  await page.waitForFunction(() => window.navalSkirmishTest!.state.waveStatus === 'fighting', null, { timeout: 10_000 });
+
+  await expect(countdown).toBeHidden();
+  await expect(page.getByTestId('wave')).toHaveText('Wave 1');
+  expect((await page.evaluate(() => window.navalSkirmishTest!.state.enemies)).length).toBe(3);
+});
+
+test('sailing over the Edge ends the Run, and a new Run resets the dinghy and the Waves', async ({ page }) => {
   // Full throttle reaches the Edge in about 11 s, then the fall takes 1 s.
   test.setTimeout(60_000);
   await startRun(page);
@@ -113,6 +126,7 @@ test('sailing over the Edge ends the Run, and a new Run resets the dinghy', asyn
   await expect(gameOver).toBeHidden();
   await expect(warning).toBeHidden();
   const state = await page.evaluate(() => window.navalSkirmishTest!.state);
-  expect(state.run).toBe('sailing');
+  expect(state).toMatchObject({ run: 'sailing', wave: 1, waveStatus: 'countdown', enemies: [] });
+  await expect(page.getByTestId('countdown')).toBeVisible();
   expect(state.player).toMatchObject({ x: 0, y: 0, heading: 0, speed: 0, throttle: 0 });
 });

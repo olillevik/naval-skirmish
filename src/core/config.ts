@@ -7,6 +7,14 @@ export const defaultConfig: Config = {
   rimCurrentStart: 0.8,
   pointOfNoReturn: 0.95,
   fallSeconds: 1,
+  waveCountdownSeconds: 5,
+  waveSizeBase: 2,
+  spawnInner: 0.4,
+  spawnOuter: 0.75,
+  minSpawnDistance: 500,
+  arrowRange: 350,
+  enemyTurnBack: 0.75,
+  enemyCruiseThrottle: 0.6,
   vesselClasses: {
     // The sprite is 16 x 26 px, drawn at 2x.
     smallDinghy: { topSpeed: 150, acceleration: 100, turnRate: Math.PI / 2, radius: 20 },

@@ -37,6 +37,18 @@
         cursor: pointer;
       }
       #start-screen { cursor: pointer; }
+      #hud {
+        position: fixed;
+        top: 1rem;
+        left: 1rem;
+        display: flex;
+        flex-direction: column;
+        font: bold 1.25rem system-ui, sans-serif;
+        color: #eaf6ff;
+        text-shadow: 0 0 3px #0b0e1f, 0 0 3px #0b0e1f;
+        pointer-events: none;
+        user-select: none;
+      }
       #edge-warning {
         position: fixed;
         top: 1rem;
@@ -101,6 +113,10 @@
     <div id="throttle-lever" class="touch-control" data-testid="throttle-lever">
       <div id="lever-track"><div id="lever-fill"></div></div>
       <span id="lever-value" data-testid="throttle-value">0%</span>
+    </div>
+    <div id="hud">
+      <span id="wave" data-testid="wave">Wave 1</span>
+      <span id="countdown" data-testid="countdown">starts in 5</span>
     </div>
     <div id="start-screen" class="overlay" data-testid="start-screen">
       <h1>Naval Skirmish</h1>

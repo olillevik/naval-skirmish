@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { defaultConfig } from './config';
-import { createWorld, readState, step, type Commands, type Config, type World } from './world';
+import { createWorld, readState, step, type Commands, type Config, type World, type WorldState } from './world';
 
 /**
  * Round numbers so expectations are easy to work out by hand at 60 ticks per second.
- * The Arena is big enough that the movement tests never reach the Rim current.
+ * The Arena is big enough that the movement tests never reach the Rim current, and the
+ * first Wave is so far off that they never meet an enemy.
  */
 const config: Config = {
   arenaRadius: 5000,
@@ -12,6 +13,14 @@ const config: Config = {
   rimCurrentStart: 0.8,
   pointOfNoReturn: 0.95,
   fallSeconds: 0.5,
+  waveCountdownSeconds: 1000,
+  waveSizeBase: 2,
+  spawnInner: 0.4,
+  spawnOuter: 0.75,
+  minSpawnDistance: 500,
+  arrowRange: 350,
+  enemyTurnBack: 0.75,
+  enemyCruiseThrottle: 0.6,
   vesselClasses: { smallDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20 } },
 };
 const noCommands: Commands = { throttleUp: false, throttleDown: false, rudder: 0 };
@@ -284,5 +293,216 @@ describe('the Run', () => {
     const ended = run(world, up, 30);
     expect(readState(ended).run).toBe('ended');
     expect(readState(run(ended, { ...up, rudder: 1 }, 600))).toEqual(readState(ended));
+  });
+});
+
+/** Turns toward a heading as fast as the rudder allows, at the given throttle. */
+function steerTo(world: World, heading: number, throttle: number): Commands {
+  const { player } = readState(world);
+  const turn = Math.atan2(Math.sin(heading - player.heading), Math.cos(heading - player.heading));
+  return { ...noCommands, setThrottle: throttle, rudder: (turn * 60) / world.config.vesselClasses.smallDinghy.turnRate };
+}
+
+const distanceFromCentre = (vessel: { x: number; y: number }) => Math.hypot(vessel.x, vessel.y);
+const distanceBetween = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
+
+/** Runs until the state passes the test, and returns the world on that tick. Gives up after 2 minutes of play. */
+function until(world: World, done: (state: WorldState) => boolean, commands = (_: World) => noCommands): World {
+  for (let tick = 0; tick < 60 * 120; tick++) {
+    if (done(readState(world))) return world;
+    world = step(world, commands(world));
+  }
+  throw new Error('Gave up waiting');
+}
+
+/** Runs until the Wave spawns, and returns the world on the tick it spawned. */
+function untilSpawned(world: World, commands: Commands = noCommands): World {
+  return until(world, (state) => state.waveStatus === 'fighting', () => commands);
+}
+
+const untilNoEnemies = (world: World) => until(world, (state) => state.enemies.length === 0);
+
+describe('Waves', () => {
+  /** The default Arena, with a 1 s countdown. */
+  const waves: Config = { ...defaultConfig, waveCountdownSeconds: 1 };
+  /** Every spawn point is past the point of no return, so the Rim current takes each Wave over the Edge. */
+  const doomed: Config = { ...waves, rimCurrentStart: 0.2, pointOfNoReturn: 0.3 };
+
+  it('starts a Run counting down to Wave 1, and spawns it when the countdown ends', () => {
+    const start = readState(createWorld(1, waves));
+    const almost = run(createWorld(1, waves), noCommands, 59);
+    const spawned = run(almost, noCommands, 1);
+
+    expect(start).toMatchObject({ wave: 1, waveStatus: 'countdown', countdown: 1, enemies: [] });
+    expect(readState(almost)).toMatchObject({ wave: 1, waveStatus: 'countdown', enemies: [] });
+    expect(readState(almost).countdown).toBeCloseTo(1 / 60);
+    expect(readState(spawned)).toMatchObject({ wave: 1, waveStatus: 'fighting', countdown: 0 });
+    expect(readState(spawned).enemies).toHaveLength(3);
+  });
+
+  it('counts down 5 s by default', () => {
+    expect(readState(createWorld(1, defaultConfig)).countdown).toBe(5);
+    expect(readState(run(createWorld(1, defaultConfig), noCommands, 299)).waveStatus).toBe('countdown');
+    expect(readState(run(createWorld(1, defaultConfig), noCommands, 300)).waveStatus).toBe('fighting');
+  });
+
+  it('is defeated when no enemies are left, then counts down to the next Wave, which has one more enemy', () => {
+    let world = untilSpawned(createWorld(1, doomed));
+    const sizes = [readState(world).enemies.length];
+    for (const wave of [2, 3]) {
+      world = untilNoEnemies(world);
+      expect(readState(world)).toMatchObject({ wave, waveStatus: 'countdown', countdown: 1 });
+      world = untilSpawned(world);
+      sizes.push(readState(world).enemies.length);
+    }
+
+    expect(sizes).toEqual([3, 4, 5]);
+    expect(readState(world).run).toBe('sailing');
+  });
+
+  it('spawns the same Wave from the same seed, and a different one from another seed', () => {
+    const spawnPoints = (seed: number) => readState(untilSpawned(createWorld(seed, waves))).enemies.map(({ x, y }) => ({ x, y }));
+
+    expect(spawnPoints(3)).toEqual(spawnPoints(3));
+    expect(spawnPoints(4)).not.toEqual(spawnPoints(3));
+  });
+
+  it('spawns every enemy between 40% and 75% of the radius, outside the Rim current, facing the player', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      let world = untilSpawned(createWorld(seed, doomed));
+      for (let wave = 1; wave <= 3; wave++) {
+        const { enemies, player } = readState(world);
+        for (const enemy of enemies) {
+          expect(distanceFromCentre(enemy)).toBeGreaterThanOrEqual(0.4 * 1500);
+          expect(distanceFromCentre(enemy)).toBeLessThanOrEqual(0.75 * 1500);
+          expect(Math.sin(enemy.heading) * (player.x - enemy.x) - Math.cos(enemy.heading) * (player.y - enemy.y)).toBeCloseTo(
+            distanceBetween(enemy, player),
+          );
+        }
+        world = untilNoEnemies(world);
+        world = untilSpawned(world);
+      }
+    }
+    for (let seed = 1; seed <= 20; seed++) {
+      for (const enemy of readState(untilSpawned(createWorld(seed, waves))).enemies) {
+        expect(distanceFromCentre(enemy)).toBeLessThan(waves.rimCurrentStart * 1500);
+        expect(enemy.rimCurrent).toEqual({ x: 0, y: 0 });
+      }
+    }
+  });
+
+  it('spawns no enemy within 500 px of the player, wherever the player is', () => {
+    // At full throttle through the countdown, the player reaches about 640 px up, inside the spawn ring.
+    const slow: Config = { ...waves, waveCountdownSeconds: 5 };
+    for (let seed = 1; seed <= 30; seed++) {
+      const world = untilSpawned(createWorld(seed, slow), up);
+      const { player, enemies } = readState(world);
+
+      expect(distanceFromCentre(player)).toBeGreaterThan(0.4 * 1500);
+      for (const enemy of enemies) expect(distanceBetween(enemy, player)).toBeGreaterThanOrEqual(500);
+    }
+  });
+
+  it('never spawns two enemies on top of each other', () => {
+    const crowded: Config = { ...waves, waveSizeBase: 40 };
+    const { enemies } = readState(untilSpawned(createWorld(1, crowded)));
+
+    expect(enemies).toHaveLength(41);
+    for (const [i, a] of enemies.entries()) {
+      for (const b of enemies.slice(i + 1)) expect(distanceBetween(a, b)).toBeGreaterThanOrEqual(40);
+    }
+  });
+});
+
+describe('enemy AI', () => {
+  const waves: Config = { ...defaultConfig, waveCountdownSeconds: 1 };
+
+  it('closes in on the player, then circles at about Arrow range', () => {
+    for (let seed = 1; seed <= 5; seed++) {
+      const spawned = untilSpawned(createWorld(seed, waves));
+      const later = run(spawned, noCommands, 60 * 30);
+      const { player, enemies } = readState(later);
+
+      expect(enemies).toHaveLength(3);
+      for (const [i, enemy] of enemies.entries()) {
+        expect(distanceBetween(enemy, player)).toBeLessThan(distanceBetween(readState(spawned).enemies[i], player));
+        expect(distanceBetween(enemy, player)).toBeGreaterThan(0.85 * 350);
+        expect(distanceBetween(enemy, player)).toBeLessThan(1.15 * 350);
+      }
+      // Still circling, not parked.
+      expect(distanceBetween(readState(run(later, noCommands, 60)).enemies[0], enemies[0])).toBeGreaterThan(30);
+    }
+  });
+
+  it('does not sail into the Rim current by itself, even to reach a player at its rim', () => {
+    for (let seed = 1; seed <= 5; seed++) {
+      let world = createWorld(seed, waves);
+      world = until(world, ({ player }) => distanceFromCentre(player) >= 0.7 * 1500, () => ({ ...noCommands, setThrottle: 1 }));
+      for (let tick = 0; tick < 60 * 40; tick++) {
+        world = step(world, { ...noCommands, setThrottle: 0 });
+        for (const enemy of readState(world).enemies) expect(distanceFromCentre(enemy)).toBeLessThan(0.8 * 1500);
+      }
+      expect(readState(world).enemies).toHaveLength(3);
+      expect(distanceFromCentre(readState(world).player)).toBeGreaterThan(0.75 * 1500);
+    }
+  });
+
+  it('can be pushed over the Edge, where it falls and is lost, and that defeats the Wave', () => {
+    // One enemy that never rows, so the player can nose it along in a straight line.
+    const adrift: Config = { ...waves, waveSizeBase: 0, enemyTurnBack: 0, enemyCruiseThrottle: 0 };
+    let touched = false;
+    const ramming = (world: World) => {
+      const { player, enemies } = readState(world);
+      if (distanceBetween(player, enemies[0]) < 40.01) touched = true;
+      return steerTo(world, Math.atan2(enemies[0].x - player.x, player.y - enemies[0].y), 1);
+    };
+    const world = until(untilSpawned(createWorld(1, adrift)), (state) => state.enemies.length === 0, ramming);
+
+    expect(touched).toBe(true);
+    expect(readState(world)).toMatchObject({ enemies: [], wave: 2, waveStatus: 'countdown' });
+  });
+});
+
+describe('contact', () => {
+  it('pushes two touching vessels apart so they never overlap', () => {
+    const homing: Config = { ...defaultConfig, waveCountdownSeconds: 1, waveSizeBase: 0, enemyTurnBack: 0 };
+    let world = untilSpawned(createWorld(2, homing));
+    let closest = Infinity;
+    for (let tick = 0; tick < 60 * 20; tick++) {
+      world = step(world, noCommands);
+      const { player, enemies } = readState(world);
+      closest = Math.min(closest, distanceBetween(player, enemies[0]));
+    }
+
+    // The enemy rows into the still player for the whole time, and pushes it along.
+    expect(closest).toBeGreaterThan(40 - 0.001);
+    expect(closest).toBeLessThan(40.01);
+    expect(distanceFromCentre(readState(world).player)).toBeGreaterThan(0);
+  });
+
+  it('keeps a crowd of circling enemies and the player from overlapping', () => {
+    const crowd: Config = { ...defaultConfig, waveCountdownSeconds: 1, waveSizeBase: 12 };
+    let world = untilSpawned(createWorld(3, crowd));
+    for (let tick = 0; tick < 60 * 30; tick++) {
+      world = step(world, { ...noCommands, rudder: 0.3, setThrottle: 1 });
+      const vessels = [readState(world).player, ...readState(world).enemies];
+      for (const [i, a] of vessels.entries()) {
+        for (const b of vessels.slice(i + 1)) expect(distanceBetween(a, b)).toBeGreaterThan(40 - 0.001);
+      }
+    }
+  });
+});
+
+describe('determinism over a full Wave', () => {
+  it('gives identical states for the same seed, config and commands', () => {
+    const script = (tick: number): Commands => ({ ...noCommands, setThrottle: 1, rudder: Math.sin(tick / 90) });
+    const play = () => {
+      let world = createWorld(11, defaultConfig);
+      for (let tick = 0; tick < 60 * 40; tick++) world = step(world, script(tick));
+      return readState(world);
+    };
+
+    expect(play().enemies).toHaveLength(3);
+    expect(play()).toEqual(play());
   });
 });
