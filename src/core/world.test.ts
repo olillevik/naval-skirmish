@@ -615,11 +615,13 @@ describe('determinism over a full Wave', () => {
     const script = (tick: number): Commands => ({ ...noCommands, setThrottle: 1, rudder: Math.sin(tick / 90) });
     const play = () => {
       let world = createWorld(11, defaultConfig);
-      for (let tick = 0; tick < 60 * 40; tick++) world = step(world, script(tick));
+      for (let tick = 0; tick < 60 * 20; tick++) world = step(world, script(tick));
       return readState(world);
     };
 
-    expect(play().enemies).toHaveLength(3);
+    // One of the three enemies in Wave 1 has sunk, and the player vessel is still afloat.
+    expect(play().run).toBe('sailing');
+    expect(play().enemies).toHaveLength(2);
     expect(play()).toEqual(play());
   });
 });
@@ -744,6 +746,61 @@ describe('Arrows', () => {
     expect(readState(stayed).player.health).toBe(90);
     expect(readState(dodged).player.health).toBe(100);
     expect(distanceFromCentre(readState(dodged).player)).toBeGreaterThan(300);
+  });
+
+  describe('aimed where the target will be', () => {
+    /**
+     * One Volley only, from a still enemy always within Arrow range. The player vessel turns on the spot
+     * and is at top speed in one tick, and on the tick the Volley is fired it sails side-on to the enemy.
+     */
+    const leading = (arrowSpeed: number, volleySize: number) =>
+      withClasses(
+        { ...still, volleySeconds: 100, arrowRange: 2000, arrowSpeed },
+        { topSpeed: 150, acceleration: 150 * 60, turnRate: Math.PI * 60, arrowDamage: 0 },
+        { volleySize, arrowDamage: 10 },
+      );
+    /** The world on the tick the Volley is fired, with the player vessel sailing at the turn from side-on. */
+    const fire = (config: Config, turn = 0) => {
+      const spawned = untilSpawned(createWorld(1, config));
+      const { player, enemies } = readState(spawned);
+      const heading = bearingTo(enemies[0], player) + Math.PI / 2 + turn;
+      return { fired: step(spawned, steerTo(spawned, heading, 1)), heading };
+    };
+    const noEnemyArrows = (state: WorldState) => arrowsOf(state, 'enemy').length === 0;
+
+    it('hit a vessel that keeps its course and speed, and miss one that turns after they are fired', () => {
+      const { fired, heading } = fire(leading(400, 1));
+      const { player, enemies } = readState(fired);
+      const [arrow] = arrowsOf(readState(fired), 'enemy');
+      // The Arrow leads the player vessel, well ahead of where it is now.
+      expect(Math.abs(turnBetween(bearingTo(enemies[0], player), arrow.heading))).toBeGreaterThan(0.2);
+
+      const kept = until(fired, noEnemyArrows, (world) => steerTo(world, heading, 1));
+      const turned = until(fired, noEnemyArrows, (world) => steerTo(world, heading + Math.PI, 1));
+      const slowed = until(fired, noEnemyArrows, (world) => steerTo(world, heading, 0));
+
+      expect(readState(kept).player.health).toBe(90);
+      expect(readState(kept).events).toContainEqual({ type: 'arrowHit', vesselId: player.id });
+      expect(readState(turned).player.health).toBe(100);
+      expect(readState(slowed).player.health).toBe(100);
+    });
+
+    it('fan a Volley out around the aim', () => {
+      const [single] = arrowsOf(readState(fire(leading(400, 1)).fired), 'enemy');
+      const volley = arrowsOf(readState(fire(leading(400, 3)).fired), 'enemy');
+
+      expect(volley.map((arrow) => turnBetween(single.heading, arrow.heading).toFixed(3))).toEqual(['-0.100', '0.000', '0.100']);
+    });
+
+    it('go at where the target is now when no Arrow can catch it', () => {
+      // Arrows slower than the player vessel, which sails away from the enemy at 45 degrees off straight away.
+      const { fired } = fire(leading(100, 1), -Math.PI / 4);
+      const { player, enemies } = readState(fired);
+      const [arrow] = arrowsOf(readState(fired), 'enemy');
+
+      expect(player.speed).toBe(150);
+      expect(turnBetween(bearingTo(enemies[0], player), arrow.heading)).toBeCloseTo(0);
+    });
   });
 });
 

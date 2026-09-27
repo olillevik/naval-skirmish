@@ -531,7 +531,7 @@ function distanceToSegment(point: Vector, start: Vector, dx: number, dy: number)
 
 /**
  * Each Crew whose Volley is ready fires it at the closest vessel on the other side within Arrow range,
- * aimed where that vessel is now. The Arrows fan out evenly around the aim.
+ * aimed where that vessel will be when the Arrow gets there. The Arrows fan out evenly around the aim.
  */
 function fireVolleys(vessels: Vessel[], config: Config): Arrow[] {
   const fired: Arrow[] = [];
@@ -546,7 +546,7 @@ function fireVolleys(vessels: Vessel[], config: Config): Arrow[] {
     );
     if (!target) continue;
     const { volleySize, arrowDamage } = config.vesselClasses[vessel.vesselClass];
-    const aim = bearing(vessel.x, vessel.y, target.x, target.y);
+    const aim = leadAim(vessel, target, config);
     for (let i = 0; i < volleySize; i++) {
       const heading = aim + (i - (volleySize - 1) / 2) * config.volleySpread;
       fired.push({ side: sideOf(vessel), x: vessel.x, y: vessel.y, heading, damage: arrowDamage, flown: 0 });
@@ -554,6 +554,25 @@ function fireVolleys(vessels: Vessel[], config: Config): Arrow[] {
     vessel.volleyTicks = ticksFor(config.volleySeconds);
   }
   return fired;
+}
+
+/**
+ * The heading at which an Arrow from the vessel meets the target, if the target keeps its velocity.
+ * When no Arrow can catch the target, the heading toward where it is now.
+ */
+function leadAim(vessel: Vessel, target: Vessel, config: Config): number {
+  const [dx, dy] = [target.x - vessel.x, target.y - vessel.y];
+  const v = velocity(target);
+  // The flight time t at which the target, at (dx, dy) + v * t, is arrowSpeed * t away: a * t^2 + b * t + c = 0.
+  const a = v.x ** 2 + v.y ** 2 - config.arrowSpeed ** 2;
+  const b = 2 * (dx * v.x + dy * v.y);
+  const c = dx ** 2 + dy ** 2;
+  const root = Math.sqrt(b ** 2 - 4 * a * c);
+  const times = a === 0 ? [-c / b] : [(-b - root) / (2 * a), (-b + root) / (2 * a)];
+  // NaN, when there is no real root, fails the test too.
+  const t = Math.min(...times.filter((time) => time > 0));
+  if (!Number.isFinite(t)) return bearing(vessel.x, vessel.y, target.x, target.y);
+  return bearing(vessel.x, vessel.y, target.x + v.x * t, target.y + v.y * t);
 }
 
 /** Counts down to the Wave and spawns it, or starts the next countdown once the Wave has no enemies left. */
@@ -664,10 +683,6 @@ function steerTo(vessel: Vessel, heading: number, throttle: number, turnRate: nu
 function ram(vessels: Vessel[], touchedBefore: readonly number[], config: Config, events: WorldEvent[]): number[] {
   const [player, ...enemies] = vessels;
   const touching: number[] = [];
-  const velocity = (vessel: Vessel) => ({
-    x: Math.sin(vessel.heading) * vessel.speed + vessel.rimCurrent.x,
-    y: -Math.cos(vessel.heading) * vessel.speed + vessel.rimCurrent.y,
-  });
   for (const enemy of enemies) {
     const [playerRadius, enemyRadius] = [player, enemy].map((vessel) => config.vesselClasses[vessel.vesselClass].radius);
     const dx = enemy.x - player.x;
@@ -722,6 +737,14 @@ function pushApart(vessels: Vessel[], config: Config): Vessel[] {
     if (!overlapped) break;
   }
   return pushed;
+}
+
+/** The vessel's velocity at its heading and speed, plus the Rim current's pull, px/s. */
+function velocity(vessel: Vessel): Vector {
+  return {
+    x: Math.sin(vessel.heading) * vessel.speed + vessel.rimCurrent.x,
+    y: -Math.cos(vessel.heading) * vessel.speed + vessel.rimCurrent.y,
+  };
 }
 
 /** Radians, clockwise from up the screen, from the first point toward the second. */
