@@ -1,11 +1,13 @@
 import { Scene, type GameObjects, type Input, type Tweens } from 'phaser';
 import { defaultConfig } from '../core/config';
 import {
+  applyCabinAction,
   createWorld,
   readState,
   step,
   TICK_SECONDS,
   type Arrow,
+  type CabinItemName,
   type Commands,
   type Config,
   type Fireball,
@@ -13,9 +15,11 @@ import {
   type World,
   type WorldEvent,
 } from '../core/world';
+import { Cabin } from './cabin';
 import { frameForHeading } from './directionalSprite';
 import kitSheets from './kitSheets.json';
 import { installTestHook } from './testHook';
+import { text } from './text';
 import { TouchControls } from './touchControls';
 
 /** Longest frame we catch up on, so a backgrounded tab doesn't run thousands of ticks. */
@@ -108,6 +112,13 @@ export class GameScene extends Scene {
   private scoreLabel = document.getElementById('score')!;
   private bestScoreLabel = document.getElementById('best-score')!;
   private endCauseLabel = document.getElementById('end-cause')!;
+  private cabinMark = document.getElementById('cabin-mark')!;
+  private cabinButton = document.getElementById('cabin-button')!;
+  private cabin = new Cabin(
+    defaultConfig,
+    (item) => this.buy(item),
+    () => this.closeCabin(),
+  );
   /** False while a screen such as the start screen is showing, so the world doesn't tick. */
   private running = false;
 
@@ -141,6 +152,17 @@ export class GameScene extends Scene {
         if (!event.repeat) this.fireballKeyPressed = true;
       });
     }
+    // E and Esc toggle the Cabin. On a phone, the Cabin button opens it and its close button closes it.
+    for (const key of ['keydown-E', 'keydown-ESC']) {
+      this.input.keyboard!.on(key, (event: KeyboardEvent) => {
+        if (event.repeat) return;
+        if (this.cabin.open) this.closeCabin();
+        else this.openCabin();
+      });
+    }
+    setText(this.cabinMark, text.cabinMark);
+    setText(this.cabinButton, text.cabinButton);
+    this.cabinButton.addEventListener('click', () => this.openCabin());
     this.anims.create({ key: 'explosion', frames: EXPLOSION_FRAMES.map((key) => ({ key })), frameRate: EXPLOSION_FPS });
     this.draw([]);
     installTestHook(() => readState(this.world));
@@ -152,7 +174,8 @@ export class GameScene extends Scene {
   }
 
   update(_time: number, deltaMs: number): void {
-    if (!this.running) return;
+    // While the Cabin is open the world doesn't tick and no commands are sent, so the Run stays exactly as it was.
+    if (!this.running || this.cabin.open) return;
     this.accumulator += Math.min(deltaMs / 1000, MAX_FRAME_SECONDS);
     // Read only when a tick runs, so a lever move in a frame without a tick isn't lost.
     // A frame can run several ticks, and each tick's events are only in the state until the next tick.
@@ -184,6 +207,40 @@ export class GameScene extends Scene {
       setText(this.bestScoreLabel, `Best score ${saveBestScore(score)}`);
       this.gameOverScreen.hidden = false;
     }
+    this.cabinMark.hidden = this.cabinButton.hidden = !this.cabinCanOpen();
+  }
+
+  /** The Cabin opens only while the Run is sailing, not once the dinghy has started sinking or falling. */
+  private cabinCanOpen(): boolean {
+    return this.running && readState(this.world).run === 'sailing';
+  }
+
+  /** Pauses the game under the Cabin: the world, and the view's animations and timers. */
+  private openCabin(): void {
+    if (this.cabin.open || !this.cabinCanOpen()) return;
+    this.cabin.show(readState(this.world));
+    this.tweens.pauseAll();
+    this.anims.pauseAll();
+    this.time.paused = true;
+  }
+
+  /** Resumes from where the Cabin paused. Presses made while it was open are dropped, not sent late. */
+  private closeCabin(): void {
+    if (!this.cabin.open) return;
+    this.cabin.hide();
+    this.touch.takeThrottle();
+    this.touch.takeFireball();
+    this.takeFireballKey();
+    this.tweens.resumeAll();
+    this.anims.resumeAll();
+    this.time.paused = false;
+    // The HUD shows what the purchases changed straight away.
+    this.draw([]);
+  }
+
+  private buy(item: CabinItemName): void {
+    this.world = applyCabinAction(this.world, { type: 'buy', item });
+    this.cabin.show(readState(this.world));
   }
 
   /** Starts a fresh Run. The start screen and the game-over screen call this. */

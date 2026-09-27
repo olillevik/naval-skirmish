@@ -140,6 +140,9 @@ test('sailing over the Edge ends the Run, and a new Run resets the dinghy and th
   await expect(gameOver).toBeVisible({ timeout: 10_000 });
   await page.keyboard.up('KeyW');
   await expect(page.getByTestId('end-cause')).toHaveText('The dinghy fell off the Edge');
+  await expect(page.getByTestId('cabin-mark')).toBeHidden();
+  await page.keyboard.press('KeyE');
+  await expect(page.getByTestId('cabin')).toBeHidden();
   expect(await page.evaluate(() => window.navalSkirmishTest!.state)).toMatchObject({ run: 'ended', endCause: 'fell off the Edge' });
 
   await page.getByTestId('new-run').click();
@@ -182,4 +185,48 @@ test('the game-over screen shows the Score and a Best score from local storage, 
     await expect(page.getByTestId('best-score'), load).toHaveText('Best score 7');
   }
   expect(await page.evaluate(() => localStorage.getItem('naval-skirmish.bestScore'))).toBe('7');
+});
+
+for (const key of ['KeyE', 'Escape']) {
+  test(`${key} opens the Cabin, which freezes the world until ${key} closes it`, async ({ page }) => {
+    await startRun(page);
+    const cabin = page.getByTestId('cabin');
+    const state = () => page.evaluate(() => window.navalSkirmishTest!.state);
+    await expect(page.getByTestId('cabin-mark')).toBeVisible();
+    await page.keyboard.down('KeyW');
+    await page.waitForTimeout(500);
+
+    await page.keyboard.press(key);
+    await expect(cabin).toBeVisible();
+    const opened = await state();
+    await page.waitForTimeout(500);
+    const frozen = await state();
+    await page.keyboard.press(key);
+    await expect(cabin).toBeHidden();
+    await page.waitForTimeout(300);
+    await page.keyboard.up('KeyW');
+    const resumed = await state();
+
+    expect(frozen).toEqual(opened);
+    expect(opened.player.speed).toBeGreaterThan(0);
+    expect(resumed.player.y).toBeLessThan(opened.player.y);
+    expect(resumed.countdown).toBeLessThan(opened.countdown);
+  });
+}
+
+test('at the start of a Run the Cabin shows Gold, health and the dinghy, and Repair is disabled', async ({ page }) => {
+  await startRun(page);
+
+  await page.keyboard.press('KeyE');
+
+  await expect(page.getByTestId('cabin-gold')).toHaveText('Gold 0');
+  await expect(page.getByTestId('cabin-health')).toHaveText('Health 100 / 100');
+  await expect(page.getByTestId('cabin-vessel')).toHaveText('small dinghy');
+  await expect(page.getByTestId('cabin-item-repair')).toContainText('Repair');
+  await expect(page.getByTestId('cabin-item-repair')).toContainText('10 Gold');
+  const buttons = page.getByTestId('cabin-items').getByRole('button');
+  await expect(buttons).not.toHaveCount(0);
+  for (const button of await buttons.all()) await expect(button).toBeDisabled();
+  await page.getByTestId('cabin-close').click();
+  await expect(page.getByTestId('cabin')).toBeHidden();
 });

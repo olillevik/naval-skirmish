@@ -46,4 +46,7 @@ export const defaultConfig: Config = {
     // The sprite is 66 x 113 px, drawn at 1x. Faster than a dinghy, but slow to turn and to get going.
     enemyShip: { topSpeed: 200, acceleration: 50, turnRate: Math.PI / 4, radius: 40, health: 120, volleySize: 3, arrowDamage: 5, gold: 20 },
   },
+  cabin: {
+    repair: { prices: [10], healShare: 0.25 },
+  },
 };

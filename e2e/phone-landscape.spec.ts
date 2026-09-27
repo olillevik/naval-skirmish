@@ -182,3 +182,28 @@ test('tapping New Run after falling off the Edge starts a fresh Run', async ({ p
   expect(await dinghy(page)).toMatchObject({ x: 0, y: 0, heading: 0, speed: 0, throttle: 0 });
   await expect(page.getByTestId('throttle-value')).toHaveText('0%');
 });
+
+test('the Cabin button opens the Cabin, which freezes the world, and the close button closes it', async ({ page }) => {
+  await startRun(page, 'tap');
+  const cabin = page.getByTestId('cabin');
+  const state = () => page.evaluate(() => window.navalSkirmishTest!.state);
+  await expect(page.getByTestId('cabin-button')).toBeVisible();
+  const button = await box(page, 'cabin-button');
+  const lever = await box(page, 'throttle-lever');
+  const fireball = await box(page, 'fireball-button');
+  // In the top right, clear of the lever strip and the Fireball button.
+  expect(button.x + button.width).toBeLessThanOrEqual(lever.x);
+  expect(button.y + button.height).toBeLessThan(fireball.y);
+  expect(button.x).toBeGreaterThan(page.viewportSize()!.width / 2);
+
+  await page.getByTestId('cabin-button').tap();
+  await expect(cabin).toBeVisible();
+  const opened = await state();
+  await page.waitForTimeout(500);
+  expect(await state()).toEqual(opened);
+  await expect(page.getByTestId('buy-repair')).toBeDisabled();
+  await page.getByTestId('cabin-close').tap();
+
+  await expect(cabin).toBeHidden();
+  await expect.poll(async () => (await state()).countdown).toBeLessThan(opened.countdown);
+});

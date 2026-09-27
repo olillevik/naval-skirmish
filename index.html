@@ -128,6 +128,50 @@
       @media (pointer: coarse) {
         #fireball-button { display: flex; }
       }
+      /* Top right, left of the throttle lever, so it is clear of the lever and the Fireball button. */
+      #cabin-button {
+        display: none;
+        position: fixed;
+        top: 0.75rem;
+        right: 6.75rem;
+        min-width: 4.5rem;
+        height: 3rem;
+        padding: 0 1rem;
+        border: 2px solid #eaf6ff;
+        border-radius: 0.5rem;
+        font: bold 1rem system-ui, sans-serif;
+        color: #eaf6ff;
+        background: rgb(11 14 31 / 0.65);
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+      }
+      @media (pointer: coarse) {
+        #cabin-button { display: block; }
+        /* The phone has the Cabin button instead. */
+        #cabin-mark { display: none; }
+      }
+      #cabin-button[hidden] { display: none; }
+      /* Starts at the top and scrolls, so a long item list fits a landscape phone. */
+      #cabin { justify-content: flex-start; overflow-y: auto; touch-action: pan-y; background: rgb(11 14 31 / 0.9); }
+      #cabin h1 { font-size: 1.75rem; }
+      #cabin-status { display: flex; gap: 1.5rem; }
+      #cabin-items {
+        display: grid;
+        grid-template-columns: auto auto 1fr auto auto;
+        gap: 0.5rem 1rem;
+        align-items: center;
+        width: min(40rem, 100%);
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        text-align: left;
+      }
+      #cabin-items li { display: contents; }
+      #cabin-items .level, #cabin-items .price { white-space: nowrap; }
+      /* Big enough to tap on a phone. */
+      #cabin button { min-height: 2.75rem; padding: 0.5rem 1.25rem; }
+      #cabin button:disabled { opacity: 0.4; cursor: default; }
       /* The game is landscape only. A coarse pointer means a phone or tablet, not a narrow desktop window. */
       #rotate-message { display: none; z-index: 1; background: #0b0e1f; }
       @media (orientation: portrait) and (pointer: coarse) {
@@ -143,12 +187,24 @@
       <span id="lever-value" data-testid="throttle-value">0%</span>
     </div>
     <button id="fireball-button" type="button" class="waiting" data-testid="fireball-button">No target</button>
+    <button id="cabin-button" type="button" data-testid="cabin-button" hidden></button>
     <div id="hud">
       <span id="wave" data-testid="wave">Wave 1</span>
       <span id="countdown" data-testid="countdown">starts in 5</span>
       <span id="health" data-testid="health">Health 100</span>
       <span id="gold" data-testid="gold">Gold 0</span>
       <span id="fireball" data-testid="fireball">Fireball ready</span>
+      <span id="cabin-mark" data-testid="cabin-mark" hidden></span>
+    </div>
+    <div id="cabin" class="overlay" data-testid="cabin" hidden>
+      <h1 id="cabin-title"></h1>
+      <p id="cabin-status">
+        <span id="cabin-gold" data-testid="cabin-gold"></span>
+        <span id="cabin-health" data-testid="cabin-health"></span>
+        <span id="cabin-vessel" data-testid="cabin-vessel"></span>
+      </p>
+      <ul id="cabin-items" data-testid="cabin-items"></ul>
+      <button id="cabin-close" type="button" data-testid="cabin-close"></button>
     </div>
     <div id="start-screen" class="overlay" data-testid="start-screen">
       <h1>Naval Skirmish</h1>

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { defaultConfig } from './config';
 import {
+  applyCabinAction,
   createWorld,
   readState,
   step,
+  type CabinAction,
   type Commands,
   type Config,
   type VesselClass,
@@ -56,6 +58,9 @@ const config: Config = {
     smallDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 100, volleySize: 1, arrowDamage: 5, gold: 0 },
     enemyDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 30, volleySize: 1, arrowDamage: 5, gold: 5 },
     enemyShip: { topSpeed: 160, acceleration: 15, turnRate: Math.PI / 4, radius: 40, health: 120, volleySize: 3, arrowDamage: 5, gold: 20 },
+  },
+  cabin: {
+    repair: { prices: [10], healShare: 0.25 },
   },
 };
 const noCommands: Commands = { throttleUp: false, throttleDown: false, rudder: 0 };
@@ -1243,5 +1248,91 @@ describe('Wizard vessels', () => {
     expect(wreck.wizardVessel).toBe(true);
     expect(readState(sunk).gold).toBe(21);
     expect(readState(sunk).events).toContainEqual({ type: 'goldCredited', vesselId: wreck.id, gold: 21 });
+  });
+});
+
+describe('the Cabin', () => {
+  const buyRepair: CabinAction = { type: 'buy', item: 'repair' };
+  const repairOf = (world: World) => readState(world).cabin.find((item) => item.item === 'repair')!;
+  /**
+   * One still enemy per Wave, worth 50 Gold, that the player's first Arrow sinks. The enemy's Arrows take
+   * off the given health each, so a test earns Gold and takes damage the way a player does.
+   */
+  const shop = (enemyArrowDamage: number) =>
+    withClasses({ ...still, regenRate: 0 }, { arrowDamage: 10 }, { health: 10, arrowDamage: enemyArrowDamage, gold: 50 });
+  /** Plays until the player has Gold and, if the enemy's Arrows hurt, has taken a hit. */
+  const afterFight = (enemyArrowDamage: number) =>
+    until(untilSpawned(createWorld(1, shop(enemyArrowDamage))), (state) => state.gold > 0 && state.player.health <= 100 - enemyArrowDamage);
+
+  it('starts a Run with no purchases, listing Repair at its price', () => {
+    expect(readState(createWorld(1, config)).cabin).toEqual([{ item: 'repair', level: 0, highestLevel: null, nextPrice: 10, canBuy: false }]);
+  });
+
+  it('shows the player vessel class', () => {
+    expect(readState(createWorld(1, config)).player.vesselClass).toBe('smallDinghy');
+  });
+
+  it('sells a Repair that heals 25% of max health for 10 Gold, with no time passing', () => {
+    const hurt = afterFight(30);
+    const before = readState(hurt);
+    expect(before).toMatchObject({ gold: 50, player: { health: 70 } });
+    expect(repairOf(hurt)).toMatchObject({ canBuy: true, nextPrice: 10 });
+
+    const repaired = applyCabinAction(hurt, buyRepair);
+
+    // Everything else, positions, cooldowns and the Wave countdown included, is exactly as it was.
+    expect(readState(repaired)).toEqual({
+      ...before,
+      gold: 40,
+      player: { ...before.player, health: 95 },
+      cabin: [{ item: 'repair', level: 1, highestLevel: null, nextPrice: 10, canBuy: true }],
+    });
+    expect(readState(step(repaired, noCommands)).countdown).toBe(readState(step(hurt, noCommands)).countdown);
+  });
+
+  it('can be bought again and again, and never heals above max health', () => {
+    const hurt = afterFight(30);
+
+    const once = applyCabinAction(hurt, buyRepair);
+    const twice = applyCabinAction(once, buyRepair);
+
+    expect(readState(twice)).toMatchObject({ gold: 30, player: { health: 100 } });
+    expect(repairOf(twice)).toMatchObject({ level: 2, canBuy: false });
+  });
+
+  it('refuses a Repair at full health, and leaves the world unchanged', () => {
+    const unhurt = afterFight(0);
+    expect(readState(unhurt)).toMatchObject({ gold: 50, player: { health: 100 } });
+
+    expect(repairOf(unhurt).canBuy).toBe(false);
+    expect(applyCabinAction(unhurt, buyRepair)).toBe(unhurt);
+  });
+
+  it('refuses a Repair without enough Gold, and leaves the world unchanged', () => {
+    const broke = until(untilSpawned(createWorld(1, withClasses(shop(30), { arrowDamage: 0 }, {}))), (state) => state.player.health < 100);
+    expect(readState(broke).gold).toBe(0);
+
+    expect(repairOf(broke).canBuy).toBe(false);
+    expect(applyCabinAction(broke, buyRepair)).toBe(broke);
+  });
+
+  it('refuses a Repair once the player vessel is sinking, and after the Run ends', () => {
+    // The player sinks the first enemy for Gold, and the next Waves' Arrows sink the player.
+    const doomed = withClasses(shop(20), { health: 40 }, {});
+    const sinking = until(untilSpawned(createWorld(1, doomed)), (state) => state.run === 'sinking');
+    const ended = until(sinking, (state) => state.run === 'ended');
+    expect(readState(sinking).gold).toBeGreaterThanOrEqual(10);
+
+    for (const world of [sinking, ended]) {
+      expect(repairOf(world).canBuy).toBe(false);
+      expect(applyCabinAction(world, buyRepair)).toBe(world);
+    }
+  });
+
+  it('has no purchases in a new Run', () => {
+    const repaired = applyCabinAction(afterFight(30), buyRepair);
+    expect(repairOf(repaired).level).toBe(1);
+
+    expect(readState(createWorld(1, shop(30))).cabin).toEqual([{ item: 'repair', level: 0, highestLevel: null, nextPrice: 10, canBuy: false }]);
   });
 });

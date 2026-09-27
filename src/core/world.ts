@@ -87,7 +87,36 @@ export interface Config {
   /** px/s. */
   rammingSpeed: number;
   vesselClasses: Record<VesselClassName, VesselClass>;
+  /** The Cabin's items. Everything bought lasts until the Run ends. */
+  cabin: {
+    /** Restores this share of the player vessel's max health, up to max. */
+    repair: CabinItemConfig & { healShare: number };
+  };
 }
+
+export interface CabinItemConfig {
+  /** Gold for each level, in order. A repeatable item has one price, paid each time. */
+  prices: number[];
+}
+
+/** The items the player can buy in the Cabin, in the order the Cabin lists them. */
+export type CabinItemName = 'repair';
+
+/** One Cabin item as the player sees it, so the view works out no rules of its own. */
+export interface CabinItem {
+  item: CabinItemName;
+  /** Levels bought so far. For a repeatable item, how many times it was bought. */
+  level: number;
+  /** Null for a repeatable item, which never maxes. */
+  highestLevel: number | null;
+  /** Gold for the next level. Null once the item is maxed. */
+  nextPrice: number | null;
+  /** Whether buying it now would be allowed. */
+  canBuy: boolean;
+}
+
+/** What the player does in the Cabin. Applying one takes no time. */
+export type CabinAction = { type: 'buy'; item: CabinItemName };
 
 /** The player sails a smallDinghy. Enemy dinghies sail the same boat, but are weaker. Enemy ships join later Waves. */
 export type VesselClassName = 'smallDinghy' | 'enemyDinghy' | 'enemyShip';
@@ -223,6 +252,8 @@ export interface WorldState {
   score: number;
   /** What happened during the last tick, in the order it happened. */
   events: WorldEvent[];
+  /** Every Cabin item, in the order the Cabin lists them. */
+  cabin: CabinItem[];
 }
 
 /** What the player, or the enemy AI for an enemy vessel, asks for during one tick. */
@@ -240,7 +271,10 @@ export interface Commands {
 export interface World {
   readonly seed: number;
   readonly config: Config;
-  readonly state: WorldState;
+  /** The state without the Cabin items, which readState works out from the levels. */
+  readonly state: Omit<WorldState, 'cabin'>;
+  /** The levels bought of each Cabin item in this Run. */
+  readonly cabinLevels: Readonly<Record<CabinItemName, number>>;
   /** Ticks spent falling or sinking so far. */
   readonly endingTicks: number;
   /** Ticks left before the Wave spawns. */
@@ -262,6 +296,7 @@ export function createWorld(seed: number, config: Config): World {
     random: seed,
     nextId: 1,
     touching: [],
+    cabinLevels: { repair: 0 },
     state: {
       player: newVessel(0, 'smallDinghy', 0, 0, 0, config),
       enemies: [],
@@ -318,7 +353,59 @@ function countdownTicksFor(config: Config): number {
 }
 
 export function readState(world: World): WorldState {
-  return world.state;
+  const cabin = (Object.keys(cabinRules) as CabinItemName[]).map((item) => cabinItem(world, item));
+  return { ...world.state, cabin };
+}
+
+/** The Cabin rules for each item. Tuning numbers stay in the config. */
+interface CabinRule {
+  /** A repeatable item can be bought again and again, at its one price. */
+  repeatable: boolean;
+  /** Whether the next level would change anything for the player vessel now. */
+  useful(player: Vessel, config: Config): boolean;
+  /** The player vessel once the next level is bought. */
+  apply(player: Vessel, config: Config): Vessel;
+}
+
+const cabinRules: Record<CabinItemName, CabinRule> = {
+  repair: {
+    repeatable: true,
+    useful: (player) => player.health < player.maxHealth,
+    apply: (player, config) => ({
+      ...player,
+      health: Math.min(player.maxHealth, player.health + player.maxHealth * config.cabin.repair.healShare),
+    }),
+  },
+};
+
+function cabinItem(world: World, item: CabinItemName): CabinItem {
+  const { state, config } = world;
+  const rule = cabinRules[item];
+  const { prices } = config.cabin[item];
+  const level = world.cabinLevels[item];
+  const nextPrice = rule.repeatable ? prices[0] : (prices[level] ?? null);
+  // Only while the Run is sailing, which means the player vessel is afloat and hasn't started sinking or falling.
+  const canBuy = state.run === 'sailing' && nextPrice !== null && state.gold >= nextPrice && rule.useful(state.player, config);
+  return { item, level, highestLevel: rule.repeatable ? null : prices.length, nextPrice, canBuy };
+}
+
+/**
+ * Applies what the player does in the Cabin, with no time passing. An action that isn't allowed, such as
+ * one without enough Gold or once the player vessel is no longer afloat, returns the world unchanged.
+ */
+export function applyCabinAction(world: World, action: CabinAction): World {
+  const { item } = action;
+  const { canBuy, nextPrice } = cabinItem(world, item);
+  if (!canBuy || nextPrice === null) return world;
+  return {
+    ...world,
+    cabinLevels: { ...world.cabinLevels, [item]: world.cabinLevels[item] + 1 },
+    state: {
+      ...world.state,
+      player: cabinRules[item].apply(world.state.player, world.config),
+      gold: world.state.gold - nextPrice,
+    },
+  };
 }
 
 /** Advances the world by one fixed tick of TICK_SECONDS. */
