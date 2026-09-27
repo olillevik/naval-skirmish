@@ -99,6 +99,10 @@ export interface Config {
     arrowRate: CabinItemConfig & { volleySeconds: number[] };
     /** Each level adds this many Arrows to the player Crew's Volleys. */
     volleySize: CabinItemConfig & { arrows: number };
+    /** The damage of the Captain's Fireballs at each level from 1. Level 0 is fireballDamage. */
+    fireballDamage: CabinItemConfig & { damage: number[] };
+    /** The Captain's Fireball cooldown at each level from 1, in seconds. Level 0 is fireballCooldownSeconds. */
+    fireballCooldown: CabinItemConfig & { cooldownSeconds: number[] };
   };
 }
 
@@ -108,7 +112,7 @@ export interface CabinItemConfig {
 }
 
 /** The items the player can buy in the Cabin, in the order the Cabin lists them. */
-export type CabinItemName = 'repair' | 'maxHealth' | 'regen' | 'arrowRate' | 'volleySize';
+export type CabinItemName = 'repair' | 'maxHealth' | 'regen' | 'arrowRate' | 'volleySize' | 'fireballDamage' | 'fireballCooldown';
 
 /** One Cabin item as the player sees it, so the view works out no rules of its own. */
 export interface CabinItem {
@@ -306,7 +310,7 @@ export function createWorld(seed: number, config: Config): World {
     random: seed,
     nextId: 1,
     touching: [],
-    cabinLevels: { repair: 0, maxHealth: 0, regen: 0, arrowRate: 0, volleySize: 0 },
+    cabinLevels: { repair: 0, maxHealth: 0, regen: 0, arrowRate: 0, volleySize: 0, fireballDamage: 0, fireballCooldown: 0 },
     state: {
       player: newVessel(0, 'smallDinghy', 0, 0, 0, config),
       enemies: [],
@@ -400,6 +404,8 @@ const cabinRules: Record<CabinItemName, CabinRule> = {
   regen: upgrade,
   arrowRate: upgrade,
   volleySize: upgrade,
+  fireballDamage: upgrade,
+  fireballCooldown: upgrade,
 };
 
 /**
@@ -414,6 +420,9 @@ function playerStats(vesselClass: VesselClassName, levels: CabinLevels, config: 
     regenRate: config.regenRate + levels.regen * cabin.regen.regenRate,
     volleySeconds: levels.arrowRate === 0 ? config.volleySeconds : cabin.arrowRate.volleySeconds[levels.arrowRate - 1],
     volleySize: stats.volleySize + levels.volleySize * cabin.volleySize.arrows,
+    fireballDamage: levels.fireballDamage === 0 ? config.fireballDamage : cabin.fireballDamage.damage[levels.fireballDamage - 1],
+    fireballCooldownSeconds:
+      levels.fireballCooldown === 0 ? config.fireballCooldownSeconds : cabin.fireballCooldown.cooldownSeconds[levels.fireballCooldown - 1],
   };
 }
 
@@ -470,7 +479,8 @@ export function step(world: World, commands: Commands): World {
       .filter((enemy) => enemy.health > 0)
       .map((enemy) => sail(enemy, enemyCommands(enemy, state.player, config), config)),
   ];
-  regenerate(moved[0], playerStats(moved[0].vesselClass, world.cabinLevels, config).regenRate);
+  const stats = playerStats(moved[0].vesselClass, world.cabinLevels, config);
+  regenerate(moved[0], stats.regenRate);
   const touching = ram(moved, world.touching, config, events);
   const afloat = pushApart(moved, config).map((vessel) => feelRimCurrent(vessel, config));
   const arrows = [...flyArrows(state.arrows, afloat, config, events), ...fireVolleys(afloat, world.cabinLevels, config)];
@@ -478,7 +488,7 @@ export function step(world: World, commands: Commands): World {
 
   const [player, ...enemies] = afloat;
   const target = closestInRange(player, enemies, config.fireballRange);
-  const fireballs = [...flying, ...throwFireball(player, target, commands, config), ...throwWizardFireballs(enemies, player, config)];
+  const fireballs = [...flying, ...throwFireball(player, target, commands, stats, config), ...throwWizardFireballs(enemies, player, config)];
   const overEdge = (vessel: Vessel) => Math.hypot(vessel.x, vessel.y) >= config.arenaRadius;
   for (const vessel of afloat) {
     if (vessel.health > 0 && overEdge(vessel)) events.push({ type: 'vesselOverEdge', vesselId: vessel.id });
@@ -591,12 +601,18 @@ function flyFireballs(fireballs: Fireball[], vessels: Vessel[], config: Config, 
 /**
  * Counts down the Captain's cooldown. When the player asks for a Fireball, the cooldown is ready and the
  * Targeting rule has a target, the Captain throws one straight at it and the cooldown starts. Otherwise
- * nothing happens and the cooldown isn't spent.
+ * nothing happens and the cooldown isn't spent. The Fireball's damage and the cooldown have the Upgrade levels applied.
  */
-function throwFireball(player: Vessel, target: Vessel | undefined, commands: Commands, config: Config): Fireball[] {
+function throwFireball(
+  player: Vessel,
+  target: Vessel | undefined,
+  commands: Commands,
+  stats: ReturnType<typeof playerStats>,
+  config: Config,
+): Fireball[] {
   if (player.fireballTicks > 0) player.fireballTicks--;
   if (!commands.throwFireball || player.fireballTicks > 0 || player.health === 0 || !target) return [];
-  player.fireballTicks = ticksFor(config.fireballCooldownSeconds);
+  player.fireballTicks = ticksFor(stats.fireballCooldownSeconds);
   return [
     {
       side: 'player',
@@ -604,7 +620,7 @@ function throwFireball(player: Vessel, target: Vessel | undefined, commands: Com
       y: player.y,
       heading: bearing(player.x, player.y, target.x, target.y),
       targetId: target.id,
-      damage: config.fireballDamage,
+      damage: stats.fireballDamage,
       burnTicks: ticksFor(config.fireballBurnOutSeconds),
     },
   ];

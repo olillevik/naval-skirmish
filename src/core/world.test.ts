@@ -66,6 +66,8 @@ const config: Config = {
     regen: { prices: [25, 50, 100], regenRate: 0.01 },
     arrowRate: { prices: [20, 40, 80], volleySeconds: [0.8, 0.65, 0.5] },
     volleySize: { prices: [30, 60, 120, 240], arrows: 1 },
+    fireballDamage: { prices: [30, 60, 120], damage: [55, 70, 90] },
+    fireballCooldown: { prices: [30, 60, 120], cooldownSeconds: [5, 4, 3] },
   },
 };
 const noCommands: Commands = { throttleUp: false, throttleDown: false, rudder: 0 };
@@ -1263,6 +1265,8 @@ const noPurchases = [
   { item: 'regen', level: 0, highestLevel: 3, nextPrice: 25, canBuy: false },
   { item: 'arrowRate', level: 0, highestLevel: 3, nextPrice: 20, canBuy: false },
   { item: 'volleySize', level: 0, highestLevel: 4, nextPrice: 30, canBuy: false },
+  { item: 'fireballDamage', level: 0, highestLevel: 3, nextPrice: 30, canBuy: false },
+  { item: 'fireballCooldown', level: 0, highestLevel: 3, nextPrice: 30, canBuy: false },
 ];
 
 describe('the Cabin', () => {
@@ -1375,6 +1379,8 @@ describe('Upgrades', () => {
       regen: [25, 50, 100],
       arrowRate: [20, 40, 80],
       volleySize: [30, 60, 120, 240],
+      fireballDamage: [30, 60, 120],
+      fireballCooldown: [30, 60, 120],
     } satisfies Partial<Record<CabinItemName, number[]>>;
 
     for (const [item, prices] of Object.entries(expected) as [CabinItemName, number[]][]) {
@@ -1451,11 +1457,68 @@ describe('Upgrades', () => {
     }
   });
 
+  const throwing: Commands = { ...noCommands, throwFireball: true };
+  /** The next Wave's enemies are always in Fireball range. */
+  const inRange = rich(0, 1000, { ...still, fireballRange: 1200 });
+  /** The world once the next Wave has spawned. The Captain has a target from the next tick. */
+  const nextWave = (world: World) => {
+    const { wave } = readState(world);
+    return until(world, (state) => state.wave > wave && state.waveStatus === 'fighting');
+  };
+
+  it("set the damage of the Captain's Fireballs to the configured damage at each level", () => {
+    const start = wealthy(inRange);
+
+    expect(readState(step(nextWave(start), throwing)).fireballs[0].damage).toBe(40);
+    for (const level of [1, 2, 3]) {
+      const [fireball] = readState(step(nextWave(buy(start, 'fireballDamage', level)), throwing)).fireballs;
+      expect(fireball).toMatchObject({ side: 'player', damage: cabin.fireballDamage.damage[level - 1] });
+    }
+  });
+
+  it("set the Captain's cooldown after a throw to the configured time at each level", () => {
+    const start = wealthy(inRange);
+    const cooldownAfterThrow = (world: World) => readState(step(nextWave(world), throwing)).player.fireballTicks;
+
+    expect(cooldownAfterThrow(start)).toBe(360);
+    for (const level of [1, 2, 3]) {
+      expect(cooldownAfterThrow(buy(start, 'fireballCooldown', level))).toBe(cabin.fireballCooldown.cooldownSeconds[level - 1] * 60);
+    }
+  });
+
+  it('leave a cooldown already running with its time left, and shorten the next one', () => {
+    // The Captain throws at the first enemy, and the Crew's Arrow sinks it for Gold while the cooldown runs.
+    const thrown = step(untilSpawned(createWorld(1, inRange)), throwing);
+    const cooling = until(thrown, (state) => state.gold > 0);
+    const { fireballTicks } = readState(cooling).player;
+    expect(fireballTicks).toBeGreaterThan(0);
+
+    const upgraded = buy(cooling, 'fireballCooldown');
+
+    expect(readState(upgraded).player.fireballTicks).toBe(fireballTicks);
+    expect(readState(run(upgraded, noCommands, 10)).player.fireballTicks).toBe(fireballTicks - 10);
+    const ready = until(upgraded, (state) => state.player.fireballTicks === 0);
+    expect(readState(step(nextWave(ready), throwing)).player.fireballTicks).toBe(300);
+  });
+
+  it("leave a Wizard vessel's Fireball damage and cooldown as they were", () => {
+    // A Wizard vessel in every Wave. The first one's loss pays for both Upgrades at their highest level.
+    const wizards = rich(0, 1000, { ...still, fireballRange: 1200, wizardVesselsFromWave: 1, wizardVesselChance: 1 });
+    const upgraded = buy(buy(wealthy(wizards), 'fireballDamage', 3), 'fireballCooldown', 3);
+    expect(itemOf(upgraded, 'fireballCooldown').level).toBe(3);
+
+    // A Wizard throws on the tick after its Wave spawns.
+    const state = readState(step(nextWave(upgraded), noCommands));
+    const wizard = state.enemies.find((enemy) => enemy.wizardVessel)!;
+    expect(state.fireballs.filter((fireball) => fireball.side === 'enemy')).toEqual([expect.objectContaining({ damage: 25 })]);
+    expect(wizard.fireballTicks).toBe(600);
+  });
+
   it("are refused when the player can't afford the next level, leaving the world unchanged", () => {
     const poor = wealthy(rich(0, 25));
     expect(readState(poor).gold).toBe(25);
 
-    for (const item of ['maxHealth', 'volleySize'] as const) {
+    for (const item of ['maxHealth', 'volleySize', 'fireballDamage', 'fireballCooldown'] as const) {
       expect(itemOf(poor, item).canBuy).toBe(false);
       expect(buy(poor, item)).toBe(poor);
     }
@@ -1465,7 +1528,8 @@ describe('Upgrades', () => {
   it('are refused once maxed, leaving the world unchanged', () => {
     const start = wealthy(rich(0));
 
-    for (const [item, levels] of [['maxHealth', 3], ['regen', 3], ['arrowRate', 3], ['volleySize', 4]] as const) {
+    const maxLevels = [['maxHealth', 3], ['regen', 3], ['arrowRate', 3], ['volleySize', 4], ['fireballDamage', 3], ['fireballCooldown', 3]] as const;
+    for (const [item, levels] of maxLevels) {
       const maxed = buy(start, item, levels);
       expect(buy(maxed, item)).toBe(maxed);
     }
@@ -1476,7 +1540,7 @@ describe('Upgrades', () => {
     expect(itemOf(upgraded, 'maxHealth').level).toBe(1);
 
     const fresh = createWorld(1, rich(0));
-    expect(readState(fresh).cabin.map(({ level }) => level)).toEqual([0, 0, 0, 0, 0]);
+    expect(readState(fresh).cabin.map(({ level }) => level)).toEqual([0, 0, 0, 0, 0, 0, 0]);
     expect(readState(fresh).player.maxHealth).toBe(100);
   });
 });

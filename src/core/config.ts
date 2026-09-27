@@ -52,5 +52,7 @@ export const defaultConfig: Config = {
     regen: { prices: [25, 50, 100], regenRate: 0.01 },
     arrowRate: { prices: [20, 40, 80], volleySeconds: [0.8, 0.65, 0.5] },
     volleySize: { prices: [30, 60, 120, 240], arrows: 1 },
+    fireballDamage: { prices: [30, 60, 120], damage: [55, 70, 90] },
+    fireballCooldown: { prices: [30, 60, 120], cooldownSeconds: [5, 4, 3] },
   },
 };

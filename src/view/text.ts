@@ -12,6 +12,11 @@ const cabinItems: Record<CabinItemName, CabinItemText> = {
   regen: { name: 'Regen', next: (config) => `+${config.cabin.regen.regenRate * 100}% of max health per second` },
   arrowRate: { name: 'Arrow rate', next: (config, level) => `a Volley every ${config.cabin.arrowRate.volleySeconds[level]} s` },
   volleySize: { name: 'Volley size', next: (config) => `+${config.cabin.volleySize.arrows} Arrow per Volley` },
+  fireballDamage: { name: 'Fireball damage', next: (config, level) => `${config.cabin.fireballDamage.damage[level]} damage a Fireball` },
+  fireballCooldown: {
+    name: 'Fireball cooldown',
+    next: (config, level) => `a Fireball every ${config.cabin.fireballCooldown.cooldownSeconds[level]} s`,
+  },
 };
 
 /** The game's UI text, in English. Words follow CONTEXT.md. */
