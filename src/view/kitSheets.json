@@ -26,5 +26,9 @@
   "ship-yellow": {
     "frameWidth": 120,
     "frameHeight": 168
+  },
+  "flag": {
+    "frameWidth": 70,
+    "frameHeight": 112
   }
 }

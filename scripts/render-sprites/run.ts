@@ -11,6 +11,7 @@ import type { Sheet, SheetSpec } from './render.ts';
 /** The old pack's sprites were 52 px long for the dinghy and 113 px for the ship, and these keep about that. */
 const DINGHY_PIXELS_PER_UNIT = 22;
 const SHIP_PIXELS_PER_UNIT = 13;
+const FLAG_PIXELS_PER_UNIT = 30;
 
 const SPECS: Record<string, SheetSpec> = {
   dinghy: { model: 'boat-row-small', pixelsPerUnit: DINGHY_PIXELS_PER_UNIT },
@@ -21,6 +22,8 @@ const SPECS: Record<string, SheetSpec> = {
   'ship-green': { model: 'ship-small', pixelsPerUnit: SHIP_PIXELS_PER_UNIT, sailColour: 0x44a852 },
   'ship-blue': { model: 'ship-small', pixelsPerUnit: SHIP_PIXELS_PER_UNIT, sailColour: 0x4070d8 },
   'ship-yellow': { model: 'ship-small', pixelsPerUnit: SHIP_PIXELS_PER_UNIT, sailColour: 0xe8c43a },
+  // A Wizard vessel's flag. The game shows one frame of it and tints it purple.
+  flag: { model: 'flag', pixelsPerUnit: FLAG_PIXELS_PER_UNIT },
 };
 
 const server = await createServer({ root: process.cwd(), base: '/', logLevel: 'warn', server: { port: 0 } });

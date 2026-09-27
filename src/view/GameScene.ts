@@ -51,12 +51,13 @@ const ENEMY_MARK_SCALE = 1.4;
 /**
  * A Wizard vessel has a purple ring under its hull, wider than the red mark, that pulses so it catches the eye,
  * and a flag that stands upright beside its health bar, so it can be told apart by shape as well as colour.
- * The flag is the pack's plain flag, tinted purple.
+ * The flag is the Pirate Kit's flag, in the frame where its cloth flies to the right of the pole, tinted purple.
+ * Its frames are centred on the foot of the pole, so the pole stands on the health bar's bottom edge.
  */
 const WIZARD_COLOUR = 0xa64dff;
 const WIZARD_GLOW_SCALE = 1.8;
 const WIZARD_GLOW_PULSE_MS = 800;
-const WIZARD_FLAG_SCALE = 2;
+const WIZARD_FLAG_FRAME = 30;
 /** A vessel below this share of its max health shows fire, since the kit has no damaged hulls. A burning vessel shows it too. */
 const FIRE_BELOW = 0.4;
 /** Small enough that the hull shows around the flames. */
@@ -138,7 +139,6 @@ export class GameScene extends Scene {
     }
     this.load.image('water', `${base}assets/kit/water.png`);
     this.load.image('fire', `${base}assets/fire1.png`);
-    this.load.image('wizardFlag', `${base}assets/flag1.png`);
     for (const frame of EXPLOSION_FRAMES) this.load.image(frame, `${base}assets/${frame}.png`);
   }
 
@@ -411,9 +411,7 @@ export class GameScene extends Scene {
     const { radius } = defaultConfig.vesselClasses[enemy.vesselClass];
     const glow = this.add.circle(0, 0, radius * WIZARD_GLOW_SCALE, WIZARD_COLOUR, 0.3).setStrokeStyle(4, WIZARD_COLOUR);
     const flag = this.add
-      .image(HEALTH_BAR_WIDTH / 2 + 6, -radius * HEALTH_BAR_OFFSET + HEALTH_BAR_HEIGHT, 'wizardFlag')
-      .setScale(WIZARD_FLAG_SCALE)
-      .setOrigin(0.5, 1)
+      .image(HEALTH_BAR_WIDTH / 2 + 6, -radius * HEALTH_BAR_OFFSET + HEALTH_BAR_HEIGHT, 'flag', WIZARD_FLAG_FRAME)
       .setTint(WIZARD_COLOUR);
     sprite.body.addAt(glow, 0);
     sprite.body.add(flag);
