@@ -38,8 +38,8 @@ const config: Config = {
   enemyTurnBack: 0.75,
   enemyCruiseThrottle: 0.6,
   vesselClasses: {
-    smallDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 100, volleySize: 1, arrowDamage: 5 },
-    enemyDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 30, volleySize: 1, arrowDamage: 5 },
+    smallDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 100, volleySize: 1, arrowDamage: 5, gold: 0 },
+    enemyDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 30, volleySize: 1, arrowDamage: 5, gold: 5 },
   },
 };
 const noCommands: Commands = { throttleUp: false, throttleDown: false, rudder: 0 };
@@ -58,6 +58,10 @@ describe('createWorld', () => {
     expect(player).toMatchObject({ vesselClass: 'smallDinghy', x: 0, y: 0, heading: 0, speed: 0, throttle: 0 });
     expect(enemies).toEqual([]);
     expect(run).toBe('sailing');
+  });
+
+  it('starts a Run with 0 Gold and a Score of 0', () => {
+    expect(readState(createWorld(1, config))).toMatchObject({ gold: 0, score: 0 });
   });
 
   it('accepts the default config', () => {
@@ -741,5 +745,61 @@ describe('health between Waves', () => {
     expect(readState(hit).player.health).toBe(80);
     expect(readState(nextWave).player.health).toBe(80);
     expect(readState(nextWave).enemies.map((enemy) => enemy.health)).toEqual([5, 5]);
+  });
+});
+
+describe('Gold and the Score', () => {
+  const goldOf = (state: WorldState) => state.events.filter((event) => event.type === 'goldCredited');
+
+  it("credits the enemy class's Gold the moment an enemy sinks", () => {
+    const fragile = withClasses(still, { arrowDamage: 10 }, { health: 10, arrowDamage: 0, gold: 7 });
+    const sunk = until(untilSpawned(createWorld(1, fragile)), (state) => state.enemies[0].health === 0);
+    const [wreck] = readState(sunk).enemies;
+
+    expect(readState(sunk).gold).toBe(7);
+    expect(goldOf(readState(sunk))).toEqual([{ type: 'goldCredited', vesselId: wreck.id, gold: 7 }]);
+    // Removing the wreck credits nothing more.
+    expect(readState(until(sunk, (state) => state.enemies.length === 0)).gold).toBe(7);
+  });
+
+  it('credits Gold for each enemy lost over the Edge, and counts each Wave defeated in the Score', () => {
+    // Every spawn point is past the point of no return, so the Rim current takes each Wave over the Edge.
+    const doomed: Config = { ...defaultConfig, waveCountdownSeconds: 1, rimCurrentStart: 0.2, pointOfNoReturn: 0.3 };
+    let world = untilSpawned(createWorld(1, doomed));
+    const credited: number[] = [];
+    for (const wave of [1, 2, 3]) {
+      expect(readState(world)).toMatchObject({ wave, score: wave - 1 });
+      world = until(world, (state) => state.enemies.length === 0, (next) => {
+        credited.push(...goldOf(readState(next)).map((event) => event.gold));
+        return noCommands;
+      });
+      credited.push(...goldOf(readState(world)).map((event) => event.gold));
+      expect(readState(world)).toMatchObject({ wave: wave + 1, score: wave });
+      world = untilSpawned(world);
+    }
+
+    // Waves of 3, 4 and 5 enemy dinghies at 5 Gold each.
+    expect(credited).toEqual(Array(12).fill(5));
+    expect(readState(world)).toMatchObject({ gold: 60, score: 3, run: 'sailing' });
+  });
+
+  it('credits no Gold for the player vessel, and none to enemies', () => {
+    const fragile = withClasses(still, { health: 10, arrowDamage: 0, gold: 100 }, { arrowDamage: 10 });
+    const sunk = until(untilSpawned(createWorld(1, fragile)), (state) => state.run !== 'sailing');
+
+    expect(readState(sunk)).toMatchObject({ run: 'sinking', gold: 0 });
+    expect(goldOf(readState(sunk))).toEqual([]);
+  });
+
+  it('credits no Gold and defeats no Wave once the player vessel has started sinking, even on the same tick', () => {
+    // The player vessel and the one enemy fire at each other on the same tick, and each sinks the other.
+    const trade = withClasses({ ...still, volleySeconds: 100 }, { health: 10, arrowDamage: 10 }, { health: 10, arrowDamage: 10 });
+    const sunk = until(untilSpawned(createWorld(1, trade)), (state) => state.run !== 'sailing');
+    const ended = run(sunk, noCommands, 600);
+
+    expect(readState(sunk)).toMatchObject({ run: 'sinking', gold: 0, score: 0, player: { health: 0 }, enemies: [{ health: 0 }] });
+    expect(readState(sunk).events).toContainEqual({ type: 'vesselSunk', vesselId: readState(sunk).enemies[0].id });
+    expect(goldOf(readState(sunk))).toEqual([]);
+    expect(readState(ended)).toMatchObject({ run: 'ended', gold: 0, score: 0, wave: 1 });
   });
 });

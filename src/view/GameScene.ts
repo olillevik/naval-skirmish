@@ -51,6 +51,8 @@ const HEALTH_BAR_HEIGHT = 5;
 const HEALTH_BAR_OFFSET = 36;
 const HEALTH_BAR_COLOUR = 0x4caf50;
 const HEALTH_BAR_BACK_COLOUR = 0x2b0b0b;
+/** Where the view keeps the Best score. The core knows nothing about storage. */
+const BEST_SCORE_KEY = 'naval-skirmish.bestScore';
 const END_CAUSE_TEXT = { sank: 'The dinghy sank', 'fell off the Edge': 'The dinghy fell off the Edge' };
 
 /** A vessel's hull and fire, which turn with it, inside a container that the fall and the wreck fade animate. */
@@ -79,6 +81,9 @@ export class GameScene extends Scene {
   private waveLabel = document.getElementById('wave')!;
   private countdownLabel = document.getElementById('countdown')!;
   private healthLabel = document.getElementById('health')!;
+  private goldLabel = document.getElementById('gold')!;
+  private scoreLabel = document.getElementById('score')!;
+  private bestScoreLabel = document.getElementById('best-score')!;
   private endCauseLabel = document.getElementById('end-cause')!;
   /** False while a screen such as the start screen is showing, so the world doesn't tick. */
   private running = false;
@@ -129,7 +134,7 @@ export class GameScene extends Scene {
       }
     }
 
-    const { run, player, endCause } = readState(this.world);
+    const { run, player, endCause, score } = readState(this.world);
     this.edgeWarning.hidden = !player.pastPointOfNoReturn || run === 'ended';
     this.touch.showThrottle(player.throttle);
     // Once the dinghy has crossed the Edge or started sinking, that animation owns its scale, alpha and rotation.
@@ -140,6 +145,8 @@ export class GameScene extends Scene {
     if (run === 'ended') {
       this.running = false;
       if (endCause) setText(this.endCauseLabel, END_CAUSE_TEXT[endCause]);
+      setText(this.scoreLabel, `Score ${score}`);
+      setText(this.bestScoreLabel, `Best score ${saveBestScore(score)}`);
       this.gameOverScreen.hidden = false;
     }
   }
@@ -227,7 +234,7 @@ export class GameScene extends Scene {
   }
 
   private draw(events: WorldEvent[]): void {
-    const { player, enemies, arrows, wave, waveStatus, countdown } = readState(this.world);
+    const { player, enemies, arrows, wave, waveStatus, countdown, gold } = readState(this.world);
     this.drawVessel(this.dinghy, player);
     this.overlay.clear();
     this.drawEnemies(enemies, events);
@@ -239,6 +246,7 @@ export class GameScene extends Scene {
     this.countdownLabel.hidden = waveStatus !== 'countdown';
     setText(this.countdownLabel, `starts in ${Math.ceil(countdown)}`);
     setText(this.healthLabel, `Health ${Math.ceil(player.health)}`);
+    setText(this.goldLabel, `Gold ${gold}`);
   }
 
   /**
@@ -327,6 +335,21 @@ export class GameScene extends Scene {
       ease: 'Quad.easeIn',
     });
   }
+}
+
+/**
+ * Stores the Score if it beats the stored Best score, and returns the Best score. Without local storage,
+ * such as when the browser blocks it, the Best score is only this Run's Score.
+ */
+function saveBestScore(score: number): number {
+  try {
+    const best = Number(localStorage.getItem(BEST_SCORE_KEY)) || 0;
+    if (score <= best) return best;
+    localStorage.setItem(BEST_SCORE_KEY, String(score));
+  } catch {
+    // A browser that blocks storage still gets a game-over screen.
+  }
+  return score;
 }
 
 /** Writes to the page only when the text changes. */

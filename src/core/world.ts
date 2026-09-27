@@ -71,6 +71,8 @@ export interface VesselClass {
   volleySize: number;
   /** Health each of this vessel's Arrows takes off the vessel it hits. */
   arrowDamage: number;
+  /** Gold credited to the player when an enemy of this class is lost. Nobody earns Gold for the player vessel. */
+  gold: number;
 }
 
 /** The player vessel is on one side, and every enemy vessel is on the other. */
@@ -119,7 +121,9 @@ export type WorldEvent =
   | { type: 'arrowHit'; vesselId: number }
   /** The vessel reached zero health and started sinking. */
   | { type: 'vesselSunk'; vesselId: number }
-  | { type: 'vesselOverEdge'; vesselId: number };
+  | { type: 'vesselOverEdge'; vesselId: number }
+  /** The player was credited Gold for losing the enemy vessel. */
+  | { type: 'goldCredited'; vesselId: number; gold: number };
 
 export type RunStatus = 'sailing' | 'falling' | 'sinking' | 'ended';
 
@@ -145,6 +149,10 @@ export interface WorldState {
   waveStatus: WaveStatus;
   /** Seconds left before the Wave spawns. 0 while fighting. */
   countdown: number;
+  /** The player's Gold. */
+  gold: number;
+  /** The Waves defeated in this Run. */
+  score: number;
   /** What happened during the last tick, in the order it happened. */
   events: WorldEvent[];
 }
@@ -190,6 +198,8 @@ export function createWorld(seed: number, config: Config): World {
       wave: 1,
       waveStatus: 'countdown',
       countdown: countdownTicks * TICK_SECONDS,
+      gold: 0,
+      score: 0,
       events: [],
     },
   };
@@ -258,6 +268,19 @@ export function step(world: World, commands: Commands): World {
     if (vessel.health > 0 && overEdge(vessel)) events.push({ type: 'vesselOverEdge', vesselId: vessel.id });
   }
   const endCause: EndCause | null = player.health === 0 ? 'sank' : overEdge(player) ? 'fell off the Edge' : null;
+  // Once the player vessel has started sinking or falling, even on this tick, the Run is over, so no more
+  // Gold is credited and no Wave is defeated.
+  let { gold } = state;
+  if (!endCause) {
+    for (const event of [...events]) {
+      if (event.type !== 'vesselSunk' && event.type !== 'vesselOverEdge') continue;
+      const enemy = enemies.find((vessel) => vessel.id === event.vesselId);
+      if (!enemy) continue;
+      const credit = config.vesselClasses[enemy.vesselClass].gold;
+      gold += credit;
+      events.push({ type: 'goldCredited', vesselId: enemy.id, gold: credit });
+    }
+  }
   const next: World = {
     ...world,
     state: {
@@ -267,10 +290,11 @@ export function step(world: World, commands: Commands): World {
       arrows,
       run: endCause === 'sank' ? 'sinking' : endCause ? 'falling' : 'sailing',
       endCause,
+      gold,
       events,
     },
   };
-  return advanceWave(next);
+  return endCause ? next : advanceWave(next);
 }
 
 /** The player vessel regains health once the regen delay after its last damage has run out. */
@@ -357,7 +381,13 @@ function advanceWave(world: World): World {
     return {
       ...world,
       countdownTicks,
-      state: { ...state, wave: state.wave + 1, waveStatus: 'countdown', countdown: countdownTicks * TICK_SECONDS },
+      state: {
+        ...state,
+        wave: state.wave + 1,
+        waveStatus: 'countdown',
+        countdown: countdownTicks * TICK_SECONDS,
+        score: state.score + 1,
+      },
     };
   }
   const countdownTicks = world.countdownTicks - 1;

@@ -96,6 +96,7 @@ test('the HUD counts down to Wave 1, which then spawns', async ({ page }) => {
   await startRun(page);
   const countdown = page.getByTestId('countdown');
   await expect(page.getByTestId('health')).toHaveText('Health 100');
+  await expect(page.getByTestId('gold')).toHaveText('Gold 0');
 
   await expect(page.getByTestId('wave')).toHaveText('Wave 1');
   await expect(countdown).toHaveText(/^starts in [45]$/);
@@ -127,7 +128,7 @@ test('sailing over the Edge ends the Run, and a new Run resets the dinghy and th
   await expect(gameOver).toBeHidden();
   await expect(warning).toBeHidden();
   const state = await page.evaluate(() => window.navalSkirmishTest!.state);
-  expect(state).toMatchObject({ run: 'sailing', wave: 1, waveStatus: 'countdown', enemies: [] });
+  expect(state).toMatchObject({ run: 'sailing', wave: 1, waveStatus: 'countdown', enemies: [], gold: 0, score: 0 });
   await expect(page.getByTestId('countdown')).toBeVisible();
   expect(state.player).toMatchObject({ x: 0, y: 0, heading: 0, speed: 0, throttle: 0 });
 });
@@ -144,4 +145,22 @@ test('a dinghy that sits still sinks under enemy Arrows, and the game-over scree
   await expect(page.getByTestId('end-cause')).toHaveText('The dinghy sank');
   await expect(health).toHaveText('Health 0');
   expect(await page.evaluate(() => window.navalSkirmishTest!.state)).toMatchObject({ run: 'ended', endCause: 'sank' });
+});
+
+test('the game-over screen shows the Score and a Best score from local storage, which survives a reload', async ({ page }) => {
+  // Two Runs, each about 12 s at full throttle to the Edge and 1 s to fall.
+  test.setTimeout(90_000);
+  await openGame(page);
+  await page.evaluate(() => localStorage.setItem('naval-skirmish.bestScore', '7'));
+
+  for (const load of ['first', 'after reload']) {
+    await startRun(page);
+    await page.keyboard.down('KeyW');
+    await expect(page.getByTestId('game-over')).toBeVisible({ timeout: 30_000 });
+    await page.keyboard.up('KeyW');
+
+    await expect(page.getByTestId('score'), load).toHaveText('Score 0');
+    await expect(page.getByTestId('best-score'), load).toHaveText('Best score 7');
+  }
+  expect(await page.evaluate(() => localStorage.getItem('naval-skirmish.bestScore'))).toBe('7');
 });
