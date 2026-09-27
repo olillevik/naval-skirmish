@@ -226,6 +226,8 @@ test('at the start of a Run the Cabin shows Gold, health and the dinghy, and Rep
   await expect(page.getByTestId('cabin-item-repair')).toContainText('10 Gold');
   await expect(page.getByTestId('cabin-item-volleySize')).toContainText('0 / 4');
   await expect(page.getByTestId('cabin-item-volleySize')).toContainText('30 Gold');
+  await expect(page.getByTestId('cabin-item-smallShip')).toContainText('Small ship');
+  await expect(page.getByTestId('cabin-item-smallShip')).toContainText('150 Gold');
   const buttons = page.getByTestId('cabin-items').getByRole('button');
   await expect(buttons).not.toHaveCount(0);
   for (const button of await buttons.all()) await expect(button).toBeDisabled();

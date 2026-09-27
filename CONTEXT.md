@@ -13,11 +13,11 @@ Anything the player or an enemy sails, from the smallest rowboat to the largest 
 _Avoid_: Boat (when meaning any vessel), unit
 
 **Dinghy**:
-The rowboat the player starts in. It comes in a small and a large size.
+The rowboat the player starts in.
 _Avoid_: Robot, rowboat, canoe
 
 **Ship**:
-A vessel with a hull and sails, bigger than a dinghy.
+A vessel with a hull and sails, bigger than a dinghy. The player can buy the small ship, with white sails, in the Cabin.
 _Avoid_: Using "ship" for a dinghy
 
 **Wizard**:

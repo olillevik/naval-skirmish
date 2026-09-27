@@ -38,6 +38,13 @@ const cabinItems: Record<CabinItemName, CabinItemText> = {
   farthest: targetingRuleItem('farthest'),
   lowestHealth: targetingRuleItem('lowestHealth'),
   highestHealth: targetingRuleItem('highestHealth'),
+  smallShip: {
+    name: 'Small ship',
+    next: (config) => {
+      const { health, topSpeed } = config.vesselClasses.smallShip;
+      return `${health} base max health, ${topSpeed} px/s, slower to turn`;
+    },
+  },
 };
 
 /** The game's UI text, in English. Words follow CONTEXT.md. */
@@ -55,6 +62,7 @@ export const text = {
   level: (level: number, highestLevel: number) => `${level} / ${highestLevel}`,
   vesselClasses: {
     smallDinghy: 'small dinghy',
+    smallShip: 'small ship',
     enemyDinghy: 'enemy dinghy',
     enemyShip: 'enemy ship',
   } satisfies Record<VesselClassName, string>,

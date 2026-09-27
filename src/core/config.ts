@@ -41,6 +41,8 @@ export const defaultConfig: Config = {
   vesselClasses: {
     // The sprite is 16 x 26 px, drawn at 2x.
     smallDinghy: { topSpeed: 150, acceleration: 100, turnRate: Math.PI / 2, radius: 20, health: 100, volleySize: 1, arrowDamage: 5, gold: 0 },
+    // The enemy ship's model with white sails, bought in the Cabin. It gets going and turns at 80% of the dinghy's rate.
+    smallShip: { topSpeed: 180, acceleration: 80, turnRate: (Math.PI / 2) * 0.8, radius: 40, health: 160, volleySize: 1, arrowDamage: 5, gold: 0 },
     // The same boat as the player's, but weaker.
     enemyDinghy: { topSpeed: 150, acceleration: 100, turnRate: Math.PI / 2, radius: 20, health: 30, volleySize: 1, arrowDamage: 5, gold: 5 },
     // The sprite is 66 x 113 px, drawn at 1x. Faster than a dinghy, but slow to turn and to get going.
@@ -58,5 +60,6 @@ export const defaultConfig: Config = {
     farthest: { prices: [25] },
     lowestHealth: { prices: [25] },
     highestHealth: { prices: [25] },
+    smallShip: { prices: [150] },
   },
 };

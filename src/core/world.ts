@@ -112,6 +112,8 @@ export interface Config {
     farthest: CabinItemConfig;
     lowestHealth: CabinItemConfig;
     highestHealth: CabinItemConfig;
+    /** Swaps the player vessel for a smallShip. */
+    smallShip: CabinItemConfig;
   };
 }
 
@@ -130,7 +132,8 @@ export type CabinItemName =
   | 'flamingArrows'
   | 'fireballDamage'
   | 'fireballCooldown'
-  | Exclude<TargetingRule, 'closest'>;
+  | Exclude<TargetingRule, 'closest'>
+  | 'smallShip';
 
 /** One Cabin item as the player sees it, so the view works out no rules of its own. */
 export interface CabinItem {
@@ -148,8 +151,11 @@ export interface CabinItem {
 /** What the player does in the Cabin. Applying one takes no time. */
 export type CabinAction = { type: 'buy'; item: CabinItemName } | { type: 'setTargetingRule'; rule: TargetingRule };
 
-/** The player sails a smallDinghy. Enemy dinghies sail the same boat, but are weaker. Enemy ships join later Waves. */
-export type VesselClassName = 'smallDinghy' | 'enemyDinghy' | 'enemyShip';
+/**
+ * The player starts a Run in a smallDinghy and can buy a smallShip in the Cabin. Enemy dinghies sail the same
+ * boat as the player's, but are weaker. Enemy ships join later Waves.
+ */
+export type VesselClassName = 'smallDinghy' | 'smallShip' | 'enemyDinghy' | 'enemyShip';
 
 /** The stats every vessel of one class shares. */
 export interface VesselClass {
@@ -299,7 +305,7 @@ export interface WorldState {
   score: number;
   /** What happened during the last tick, in the order it happened. */
   events: WorldEvent[];
-  /** Every Cabin item, in the order the Cabin lists them. */
+  /** Every Cabin item, in the order the Cabin lists them, except a vessel the player already sails. */
   cabin: CabinItem[];
 }
 
@@ -351,6 +357,7 @@ export function createWorld(seed: number, config: Config): World {
       farthest: 0,
       lowestHealth: 0,
       highestHealth: 0,
+      smallShip: 0,
     },
     state: {
       player: newVessel(0, 'smallDinghy', 0, 0, 0, config),
@@ -409,7 +416,9 @@ function countdownTicksFor(config: Config): number {
 }
 
 export function readState(world: World): WorldState {
-  const cabin = (Object.keys(cabinRules) as CabinItemName[]).map((item) => cabinItem(world, item));
+  const cabin = (Object.keys(cabinRules) as CabinItemName[])
+    .filter((item) => cabinRules[item].shown?.(world.state.player) ?? true)
+    .map((item) => cabinItem(world, item));
   const owned = targetingRules.filter((rule) => ownsRule(world.cabinLevels, rule));
   return { ...world.state, targetingRules: owned, cabin };
 }
@@ -422,6 +431,8 @@ interface CabinRule {
   useful(player: Vessel, config: Config): boolean;
   /** The player vessel once the next level is bought, given the levels with that one included. */
   apply(player: Vessel, config: Config, levels: CabinLevels): Vessel;
+  /** Whether the Cabin lists the item. Always, if left out. */
+  shown?(player: Vessel): boolean;
 }
 
 /** A levelled Upgrade whose effect step reads from the levels, through playerStats. */
@@ -453,6 +464,16 @@ const cabinRules: Record<CabinItemName, CabinRule> = {
   farthest: upgrade,
   lowestHealth: upgrade,
   highestHealth: upgrade,
+  smallShip: {
+    repeatable: false,
+    useful: () => true,
+    shown: (player) => player.vesselClass !== 'smallShip',
+    // Position, heading, speed and throttle stay. Health is the new full max, so the swap can rescue a sinking dinghy.
+    apply: (player, config, levels) => {
+      const { maxHealth } = playerStats('smallShip', levels, config);
+      return { ...player, vesselClass: 'smallShip', maxHealth, health: maxHealth };
+    },
+  },
 };
 
 /**

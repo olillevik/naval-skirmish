@@ -12,6 +12,7 @@ import {
   type Config,
   type Fireball,
   type Vessel,
+  type VesselClassName,
   type World,
   type WorldEvent,
 } from '../core/world';
@@ -36,9 +37,13 @@ const SPACE_DEPTH = 2500;
 const STARS_PER_SQUARE_PX = 1 / 15000;
 /**
  * The vessels are the Pirate Kit's 3D models, rendered by scripts/render-sprites into one sheet each, with a
- * frame per heading. Enemy ships come in black, red, green, blue and yellow sails. The kit's white sails are
- * left out, as the closest to the player's plain dinghy.
+ * frame per heading. The player's small ship keeps the kit's white sails, and enemy ships come in black, red,
+ * green, blue and yellow sails.
  */
+const PLAYER_VESSELS: Partial<Record<VesselClassName, { sheet: string; noun: string }>> = {
+  smallDinghy: { sheet: 'dinghy', noun: 'dinghy' },
+  smallShip: { sheet: 'ship-white', noun: 'ship' },
+};
 const ENEMY_SHIP_SHEETS = ['ship-black', 'ship-red', 'ship-green', 'ship-blue', 'ship-yellow'];
 const ENEMY_MARK_COLOUR = 0xd62f2f;
 /** The ring is a little wider than the collision circle, so it shows around the hull. */
@@ -73,7 +78,6 @@ const HEALTH_BAR_COLOUR = 0x4caf50;
 const HEALTH_BAR_BACK_COLOUR = 0x2b0b0b;
 /** Where the view keeps the Best score. The core knows nothing about storage. */
 const BEST_SCORE_KEY = 'naval-skirmish.bestScore';
-const END_CAUSE_TEXT = { sank: 'The dinghy sank', 'fell off the Edge': 'The dinghy fell off the Edge' };
 
 /** A vessel's hull and fire, inside a container that the fall and the wreck fade animate. */
 interface VesselSprite {
@@ -203,7 +207,7 @@ export class GameScene extends Scene {
     }
     if (run === 'ended') {
       this.running = false;
-      if (endCause) setText(this.endCauseLabel, END_CAUSE_TEXT[endCause]);
+      if (endCause) setText(this.endCauseLabel, `The ${PLAYER_VESSELS[player.vesselClass]!.noun} ${endCause}`);
       setText(this.scoreLabel, `Score ${score}`);
       setText(this.bestScoreLabel, `Best score ${saveBestScore(score)}`);
       this.gameOverScreen.hidden = false;
@@ -337,6 +341,9 @@ export class GameScene extends Scene {
 
   private draw(events: WorldEvent[]): void {
     const { player, enemies, arrows, fireballs, wave, waveStatus, countdown, gold } = readState(this.world);
+    // Buying a vessel in the Cabin swaps the sheet.
+    const { sheet } = PLAYER_VESSELS[player.vesselClass]!;
+    if (this.dinghy.hull.texture.key !== sheet) this.dinghy.hull.setTexture(sheet);
     this.drawVessel(this.dinghy, player);
     this.overlay.clear();
     this.drawEnemies(enemies, events);

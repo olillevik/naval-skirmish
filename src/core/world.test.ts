@@ -58,6 +58,7 @@ const config: Config = {
   rammingSpeed: 240,
   vesselClasses: {
     smallDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 100, volleySize: 1, arrowDamage: 5, gold: 0 },
+    smallShip: { topSpeed: 150, acceleration: 24, turnRate: (Math.PI / 2) * 0.8, radius: 40, health: 160, volleySize: 1, arrowDamage: 5, gold: 0 },
     enemyDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 30, volleySize: 1, arrowDamage: 5, gold: 5 },
     enemyShip: { topSpeed: 160, acceleration: 15, turnRate: Math.PI / 4, radius: 40, health: 120, volleySize: 3, arrowDamage: 5, gold: 20 },
   },
@@ -73,6 +74,7 @@ const config: Config = {
     farthest: { prices: [25] },
     lowestHealth: { prices: [25] },
     highestHealth: { prices: [25] },
+    smallShip: { prices: [150] },
   },
 };
 const noCommands: Commands = { throttleUp: false, throttleDown: false, rudder: 0 };
@@ -393,6 +395,7 @@ const harmless: Config = {
   rammingDamage: 0,
   vesselClasses: {
     smallDinghy: { ...defaultConfig.vesselClasses.smallDinghy, arrowDamage: 0 },
+    smallShip: { ...defaultConfig.vesselClasses.smallShip, arrowDamage: 0 },
     enemyDinghy: { ...defaultConfig.vesselClasses.enemyDinghy, arrowDamage: 0 },
     enemyShip: { ...defaultConfig.vesselClasses.enemyShip, arrowDamage: 0 },
   },
@@ -649,6 +652,7 @@ function withClasses(base: Config, player: Partial<VesselClass>, enemy: Partial<
     ...base,
     vesselClasses: {
       smallDinghy: { ...base.vesselClasses.smallDinghy, ...player },
+      smallShip: base.vesselClasses.smallShip,
       enemyDinghy: { ...base.vesselClasses.enemyDinghy, ...enemy },
       enemyShip: base.vesselClasses.enemyShip,
     },
@@ -1276,6 +1280,7 @@ const noPurchases = [
   { item: 'farthest', level: 0, highestLevel: 1, nextPrice: 25, canBuy: false },
   { item: 'lowestHealth', level: 0, highestLevel: 1, nextPrice: 25, canBuy: false },
   { item: 'highestHealth', level: 0, highestLevel: 1, nextPrice: 25, canBuy: false },
+  { item: 'smallShip', level: 0, highestLevel: 1, nextPrice: 150, canBuy: false },
 ];
 
 describe('the Cabin', () => {
@@ -1550,7 +1555,7 @@ describe('Upgrades', () => {
     expect(itemOf(upgraded, 'maxHealth').level).toBe(1);
 
     const fresh = createWorld(1, rich(0));
-    expect(readState(fresh).cabin.map(({ level }) => level)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(readState(fresh).cabin.map(({ level }) => level)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     expect(readState(fresh).player.maxHealth).toBe(100);
   });
 });
@@ -1763,5 +1768,89 @@ describe('Flaming arrows', () => {
     expect(readState(sunk).gold).toBe(120);
     expect(enemyOf(sunk).burnTicks).toBe(0);
     expect(readState(until(sunk, (state) => state.waveStatus === 'countdown'))).toMatchObject({ wave: 3, score: 2 });
+  });
+});
+
+describe('the small ship', () => {
+  const buy = (world: World, item: CabinItemName, times = 1) => {
+    for (let i = 0; i < times; i++) world = applyCabinAction(world, { type: 'buy', item });
+    return world;
+  };
+  const itemOf = (world: World, item: CabinItemName) => readState(world).cabin.find((entry) => entry.item === item);
+  /**
+   * One still enemy per Wave, worth the given Gold, that the player's first Arrow sinks. Its Arrows take off
+   * the given health each. There is no regen.
+   */
+  const rich = (enemyArrowDamage: number, gold = 1000) =>
+    withClasses({ ...still, regenRate: 0 }, { arrowDamage: 10 }, { health: 10, arrowDamage: enemyArrowDamage, gold });
+  const paid = (config: Config) => until(untilSpawned(createWorld(1, config)), (state) => state.gold > 0);
+  const { smallShip } = defaultConfig.vesselClasses;
+
+  it('costs 150 Gold and swaps the vessel class, keeping position, heading, speed and throttle', () => {
+    const sailing = run(paid(rich(0)), { ...noCommands, setThrottle: 0.5, rudder: 0.5 }, 60);
+    const before = readState(sailing);
+    expect(itemOf(sailing, 'smallShip')).toMatchObject({ level: 0, highestLevel: 1, nextPrice: 150, canBuy: true });
+    expect(before.player.speed).toBeGreaterThan(0);
+
+    const { player, gold } = readState(buy(sailing, 'smallShip'));
+
+    expect(gold).toBe(before.gold - 150);
+    const { x, y, heading, speed, throttle } = before.player;
+    expect(player).toMatchObject({ vesselClass: 'smallShip', x, y, heading, speed, throttle, health: 160, maxHealth: 160 });
+  });
+
+  it("sails with the small ship's top speed, acceleration and turn rate", () => {
+    const ship = buy(paid(rich(0)), 'smallShip');
+    const full = { ...noCommands, setThrottle: 1 };
+
+    expect(readState(run(ship, full, 60)).player.speed).toBeCloseTo(smallShip.acceleration);
+    expect(readState(run(ship, full, 180)).player.speed).toBeCloseTo(smallShip.topSpeed);
+    expect(readState(run(ship, { ...noCommands, rudder: 1 }, 60)).player.heading).toBeCloseTo(smallShip.turnRate);
+  });
+
+  it('keeps every Upgrade level and applies it to the small ship', () => {
+    const upgraded = buy(buy(buy(paid(rich(30)), 'maxHealth'), 'volleySize', 2), 'regen');
+    const levels = (world: World) => readState(world).cabin.filter((item) => item.item !== 'smallShip').map(({ level }) => level);
+
+    const ship = buy(upgraded, 'smallShip');
+
+    expect(levels(ship)).toEqual(levels(upgraded));
+    expect(readState(ship).player).toMatchObject({ health: 200, maxHealth: 200 });
+    const volley = until(ship, (state) => arrowsOf(state, 'player').some((arrow) => arrow.flown === 0));
+    expect(arrowsOf(readState(volley), 'player').filter((arrow) => arrow.flown === 0)).toHaveLength(3);
+  });
+
+  it('leaves a nearly sunk dinghy afloat at full health', () => {
+    const nearlySunk = until(paid(rich(30)), (state) => state.player.health <= 10);
+    expect(readState(nearlySunk).run).toBe('sailing');
+
+    const rescued = buy(nearlySunk, 'smallShip');
+
+    expect(readState(rescued).player).toMatchObject({ vesselClass: 'smallShip', health: 160, maxHealth: 160 });
+    // An enemy Arrow that would have sunk the dinghy takes 30 off the small ship.
+    const hit = until(rescued, (state) => state.player.health < 160);
+    expect(readState(hit)).toMatchObject({ run: 'sailing', player: { health: 130 } });
+  });
+
+  it("can't be bought twice, and leaves the Cabin once owned", () => {
+    const ship = buy(paid(rich(0)), 'smallShip');
+
+    expect(itemOf(ship, 'smallShip')).toBeUndefined();
+    expect(buy(ship, 'smallShip')).toBe(ship);
+  });
+
+  it('is refused without 150 Gold, leaving the world unchanged', () => {
+    const poor = paid(rich(0, 149));
+
+    expect(itemOf(poor, 'smallShip')?.canBuy).toBe(false);
+    expect(buy(poor, 'smallShip')).toBe(poor);
+  });
+
+  it('is gone in a new Run, which starts in the small dinghy', () => {
+    expect(readState(buy(paid(rich(0)), 'smallShip')).player.vesselClass).toBe('smallShip');
+
+    const fresh = readState(createWorld(1, rich(0)));
+    expect(fresh.player).toMatchObject({ vesselClass: 'smallDinghy', health: 100, maxHealth: 100 });
+    expect(itemOf(createWorld(1, rich(0)), 'smallShip')).toMatchObject({ level: 0, nextPrice: 150 });
   });
 });

@@ -14,6 +14,8 @@ const SHIP_PIXELS_PER_UNIT = 13;
 
 const SPECS: Record<string, SheetSpec> = {
   dinghy: { model: 'boat-row-small', pixelsPerUnit: DINGHY_PIXELS_PER_UNIT },
+  // The kit's own sails are white. The player's small ship keeps them.
+  'ship-white': { model: 'ship-small', pixelsPerUnit: SHIP_PIXELS_PER_UNIT },
   'ship-black': { model: 'ship-small', pixelsPerUnit: SHIP_PIXELS_PER_UNIT, sailColour: 0x3a3a3a },
   'ship-red': { model: 'ship-small', pixelsPerUnit: SHIP_PIXELS_PER_UNIT, sailColour: 0xd64040 },
   'ship-green': { model: 'ship-small', pixelsPerUnit: SHIP_PIXELS_PER_UNIT, sailColour: 0x44a852 },

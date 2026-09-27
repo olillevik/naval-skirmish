@@ -3,6 +3,10 @@
     "frameWidth": 64,
     "frameHeight": 64
   },
+  "ship-white": {
+    "frameWidth": 120,
+    "frameHeight": 168
+  },
   "ship-black": {
     "frameWidth": 120,
     "frameHeight": 168

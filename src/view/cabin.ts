@@ -4,6 +4,7 @@ import { text } from './text';
 /** The row of one Cabin item, built once and filled from the state each time the Cabin shows. */
 interface Row {
   item: CabinItemName;
+  element: HTMLElement;
   level: HTMLElement;
   next: HTMLElement;
   price: HTMLElement;
@@ -65,6 +66,8 @@ export class Cabin {
       }),
     );
     for (const item of cabin) this.fillRow(this.rows.get(item.item) ?? this.addRow(item.item), item);
+    // An item the state leaves out, such as the vessel the player already sails, hides until a new Run lists it again.
+    for (const row of this.rows.values()) row.element.hidden = !cabin.some(({ item }) => item === row.item);
     this.element.hidden = false;
   }
 
@@ -78,8 +81,8 @@ export class Cabin {
     const buy = Object.assign(document.createElement('button'), { type: 'button', textContent: text.buy });
     buy.dataset.item = item;
     buy.dataset.testid = `buy-${item}`;
-    const row: Row = { item, level: cell('level'), next: cell('next'), price: cell('price'), buy };
     const li = document.createElement('li');
+    const row: Row = { item, element: li, level: cell('level'), next: cell('next'), price: cell('price'), buy };
     li.dataset.testid = `cabin-item-${item}`;
     li.append(cell('name', name), row.level, row.next, row.price, buy);
     this.items.append(li);
