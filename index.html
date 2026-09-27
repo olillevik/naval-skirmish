@@ -81,7 +81,8 @@
       #lever-track {
         position: absolute;
         top: 3rem;
-        bottom: 1.5rem;
+        /* Leaves room below for the Fireball button. */
+        bottom: 5.75rem;
         right: 1.5rem;
         width: 2.5rem;
         overflow: hidden;
@@ -100,6 +101,33 @@
         color: #eaf6ff;
         text-shadow: 0 0 3px #0b0e1f, 0 0 3px #0b0e1f;
       }
+      /* Sits at the foot of the throttle lever, under the right thumb. */
+      #fireball-button {
+        display: none;
+        position: fixed;
+        right: 0.75rem;
+        bottom: 1rem;
+        width: 4rem;
+        height: 4rem;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border: 2px solid #eaf6ff;
+        border-radius: 50%;
+        font: bold 0.9rem system-ui, sans-serif;
+        line-height: 1.1;
+        text-align: center;
+        color: #0b0e1f;
+        background: #ff9a2e;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+      }
+      /* Cooling down, or no enemy in range. */
+      #fireball-button.waiting { color: #eaf6ff; background: rgb(11 14 31 / 0.65); }
+      @media (pointer: coarse) {
+        #fireball-button { display: flex; }
+      }
       /* The game is landscape only. A coarse pointer means a phone or tablet, not a narrow desktop window. */
       #rotate-message { display: none; z-index: 1; background: #0b0e1f; }
       @media (orientation: portrait) and (pointer: coarse) {
@@ -111,14 +139,16 @@
     <!-- Before the overlays, so the start, game-over and rotate screens cover the controls. -->
     <div id="steering-area" class="touch-control" data-testid="steering-area"></div>
     <div id="throttle-lever" class="touch-control" data-testid="throttle-lever">
-      <div id="lever-track"><div id="lever-fill"></div></div>
+      <div id="lever-track" data-testid="lever-track"><div id="lever-fill"></div></div>
       <span id="lever-value" data-testid="throttle-value">0%</span>
     </div>
+    <button id="fireball-button" type="button" class="waiting" data-testid="fireball-button">No target</button>
     <div id="hud">
       <span id="wave" data-testid="wave">Wave 1</span>
       <span id="countdown" data-testid="countdown">starts in 5</span>
       <span id="health" data-testid="health">Health 100</span>
       <span id="gold" data-testid="gold">Gold 0</span>
+      <span id="fireball" data-testid="fireball">Fireball ready</span>
     </div>
     <div id="start-screen" class="overlay" data-testid="start-screen">
       <h1>Naval Skirmish</h1>

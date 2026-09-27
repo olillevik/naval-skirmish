@@ -36,6 +36,18 @@ export interface Config {
   volleySeconds: number;
   /** The angle between neighbouring Arrows in one Volley, radians. */
   volleySpread: number;
+  /** Health a Fireball takes off the vessel it hits. */
+  fireballDamage: number;
+  /** The Captain only throws a Fireball at an enemy this close, px. */
+  fireballRange: number;
+  /** px/s. */
+  fireballSpeed: number;
+  /** The time between one Fireball and the next from the same Wizard, in seconds. */
+  fireballCooldownSeconds: number;
+  /** How fast a Fireball turns toward its target, radians per second. */
+  fireballTurnRate: number;
+  /** How long a Fireball that hits nothing flies before it burns out, in seconds. */
+  fireballBurnOutSeconds: number;
   /** The player vessel regains this fraction of its max health each second, once regen has started. */
   regenRate: number;
   /** How long after the last damage the player vessel starts to regenerate, in seconds. */
@@ -98,6 +110,8 @@ export interface Vessel {
   maxHealth: number;
   /** Ticks left before the Crew can fire the next Volley. A ready Crew fires as soon as an enemy is in range. */
   volleyTicks: number;
+  /** Ticks left before the Wizard can throw the next Fireball. */
+  fireballTicks: number;
   /** Ticks left before regen starts. Only the player vessel regenerates. */
   regenDelayTicks: number;
   /** Ticks left before a sinking vessel is removed. */
@@ -116,9 +130,30 @@ export interface Arrow {
   flown: number;
 }
 
+/** Turns toward its target as fast as the Fireball turn rate allows, and explodes on the first vessel on the other side it hits. */
+export interface Fireball {
+  /** The side of the Wizard that threw it. It never hurts that side. */
+  side: Side;
+  x: number;
+  y: number;
+  heading: number;
+  /** The vessel the Targeting rule picked. Once that vessel sinks or is lost, the Fireball flies straight on. */
+  targetId: number;
+  damage: number;
+  /** Ticks left before it burns out. */
+  burnTicks: number;
+}
+
+/** How the Captain picks the enemy a Fireball goes for. Always closest in this milestone. */
+export type TargetingRule = 'closest';
+
 /** Something that happened during the last tick, for the view's effects. */
 export type WorldEvent =
   | { type: 'arrowHit'; vesselId: number }
+  /** A Fireball exploded on the vessel, at this point. */
+  | { type: 'fireballHit'; vesselId: number; x: number; y: number }
+  /** A Fireball flew its burn-out time without a hit, and went out at this point. */
+  | { type: 'fireballBurnedOut'; x: number; y: number }
   /** The vessel reached zero health and started sinking. */
   | { type: 'vesselSunk'; vesselId: number }
   | { type: 'vesselOverEdge'; vesselId: number }
@@ -141,6 +176,10 @@ export interface WorldState {
   /** An enemy that crosses the Edge, or has finished sinking, is lost and leaves this list. */
   enemies: Vessel[];
   arrows: Arrow[];
+  fireballs: Fireball[];
+  targetingRule: TargetingRule;
+  /** The enemy the Targeting rule picks within Fireball range after the last tick, or null when there is none. */
+  fireballTargetId: number | null;
   run: RunStatus;
   /** Why the Run is falling, sinking or ended. Null while sailing. */
   endCause: EndCause | null;
@@ -165,6 +204,8 @@ export interface Commands {
   rudder: number;
   /** Sets the throttle straight to this value, 0 (stopped) to 1 (full), in place of up and down. */
   setThrottle?: number;
+  /** True on the tick the player presses the Fireball key or button. Ignored for enemy vessels. */
+  throwFireball?: boolean;
 }
 
 export interface World {
@@ -193,6 +234,9 @@ export function createWorld(seed: number, config: Config): World {
       player: newVessel(0, 'smallDinghy', 0, 0, 0, config),
       enemies: [],
       arrows: [],
+      fireballs: [],
+      targetingRule: 'closest',
+      fireballTargetId: null,
       run: 'sailing',
       endCause: null,
       wave: 1,
@@ -220,6 +264,7 @@ function newVessel(id: number, vesselClass: VesselClassName, x: number, y: numbe
     health,
     maxHealth: health,
     volleyTicks: 0,
+    fireballTicks: 0,
     regenDelayTicks: 0,
     sinkingTicks: 0,
   };
@@ -261,8 +306,11 @@ export function step(world: World, commands: Commands): World {
   const afloat = pushApart(moved, config).map((vessel) => feelRimCurrent(vessel, config));
   regenerate(afloat[0], config);
   const arrows = [...flyArrows(state.arrows, afloat, config, events), ...fireVolleys(afloat, config)];
+  const flying = flyFireballs(state.fireballs, afloat, config, events);
 
   const [player, ...enemies] = afloat;
+  const target = closestInRange(player, enemies, config.fireballRange);
+  const fireballs = [...flying, ...throwFireball(player, target, commands, config)];
   const overEdge = (vessel: Vessel) => Math.hypot(vessel.x, vessel.y) >= config.arenaRadius;
   for (const vessel of afloat) {
     if (vessel.health > 0 && overEdge(vessel)) events.push({ type: 'vesselOverEdge', vesselId: vessel.id });
@@ -288,6 +336,8 @@ export function step(world: World, commands: Commands): World {
       player,
       enemies: [...enemies.filter((enemy) => enemy.health === 0 || !overEdge(enemy)), ...wrecks],
       arrows,
+      fireballs,
+      fireballTargetId: target?.id ?? null,
       run: endCause === 'sank' ? 'sinking' : endCause ? 'falling' : 'sailing',
       endCause,
       gold,
@@ -316,10 +366,7 @@ function flyArrows(arrows: Arrow[], vessels: Vessel[], config: Config, events: W
     const distance = Math.min(config.arrowSpeed * TICK_SECONDS, config.arrowRange - arrow.flown);
     const dx = Math.sin(arrow.heading) * distance;
     const dy = -Math.cos(arrow.heading) * distance;
-    const hit = vessels
-      .filter((vessel) => sideOf(vessel) !== arrow.side && vessel.health > 0)
-      .filter((vessel) => distanceToSegment(vessel, arrow, dx, dy) <= config.vesselClasses[vessel.vesselClass].radius)
-      .sort((a, b) => Math.hypot(a.x - arrow.x, a.y - arrow.y) - Math.hypot(b.x - arrow.x, b.y - arrow.y))[0];
+    const hit = firstHit(arrow, dx, dy, vessels, config);
     if (hit) {
       damage(hit, arrow.damage, config);
       events.push({ type: 'arrowHit', vesselId: hit.id });
@@ -330,6 +377,77 @@ function flyArrows(arrows: Arrow[], vessels: Vessel[], config: Config, events: W
     if (flown < config.arrowRange) flying.push({ ...arrow, x: arrow.x + dx, y: arrow.y + dy, flown });
   }
   return flying;
+}
+
+/** The first vessel afloat on the other side that the Arrow or Fireball touches on its way along the step. */
+function firstHit(shot: Arrow | Fireball, dx: number, dy: number, vessels: Vessel[], config: Config): Vessel | undefined {
+  return vessels
+    .filter((vessel) => sideOf(vessel) !== shot.side && vessel.health > 0)
+    .filter((vessel) => distanceToSegment(vessel, shot, dx, dy) <= config.vesselClasses[vessel.vesselClass].radius)
+    .sort((a, b) => Math.hypot(a.x - shot.x, a.y - shot.y) - Math.hypot(b.x - shot.x, b.y - shot.y))[0];
+}
+
+/**
+ * Turns each Fireball toward its target by at most one tick of the Fireball turn rate, then moves it one
+ * tick. A Fireball that touches a vessel on the other side explodes on the first one it reaches. One that
+ * has flown for the burn-out time burns out.
+ */
+function flyFireballs(fireballs: Fireball[], vessels: Vessel[], config: Config, events: WorldEvent[]): Fireball[] {
+  const flying: Fireball[] = [];
+  const maxTurn = config.fireballTurnRate * TICK_SECONDS;
+  for (const fireball of fireballs) {
+    const target = vessels.find((vessel) => vessel.id === fireball.targetId && vessel.health > 0);
+    const turn = target ? angleBetween(fireball.heading, bearing(fireball.x, fireball.y, target.x, target.y)) : 0;
+    const heading = fireball.heading + clamp(turn, -maxTurn, maxTurn);
+    const distance = config.fireballSpeed * TICK_SECONDS;
+    const dx = Math.sin(heading) * distance;
+    const dy = -Math.cos(heading) * distance;
+    const hit = firstHit(fireball, dx, dy, vessels, config);
+    if (hit) {
+      damage(hit, fireball.damage, config);
+      events.push({ type: 'fireballHit', vesselId: hit.id, x: hit.x, y: hit.y });
+      if (hit.health === 0) events.push({ type: 'vesselSunk', vesselId: hit.id });
+      continue;
+    }
+    const [x, y] = [fireball.x + dx, fireball.y + dy];
+    if (fireball.burnTicks <= 1) {
+      events.push({ type: 'fireballBurnedOut', x, y });
+      continue;
+    }
+    flying.push({ ...fireball, x, y, heading, burnTicks: fireball.burnTicks - 1 });
+  }
+  return flying;
+}
+
+/**
+ * Counts down the Captain's cooldown. When the player asks for a Fireball, the cooldown is ready and the
+ * Targeting rule has a target, the Captain throws one straight at it and the cooldown starts. Otherwise
+ * nothing happens and the cooldown isn't spent.
+ */
+function throwFireball(player: Vessel, target: Vessel | undefined, commands: Commands, config: Config): Fireball[] {
+  if (player.fireballTicks > 0) player.fireballTicks--;
+  if (!commands.throwFireball || player.fireballTicks > 0 || player.health === 0 || !target) return [];
+  player.fireballTicks = ticksFor(config.fireballCooldownSeconds);
+  return [
+    {
+      side: 'player',
+      x: player.x,
+      y: player.y,
+      heading: bearing(player.x, player.y, target.x, target.y),
+      targetId: target.id,
+      damage: config.fireballDamage,
+      burnTicks: ticksFor(config.fireballBurnOutSeconds),
+    },
+  ];
+}
+
+/** The closest vessel afloat among the others that is within range of the vessel. */
+function closestInRange(vessel: Vessel, others: Vessel[], range: number): Vessel | undefined {
+  return others
+    .filter((other) => other.health > 0)
+    .map((other) => ({ other, distance: Math.hypot(other.x - vessel.x, other.y - vessel.y) }))
+    .filter(({ distance }) => distance <= range)
+    .sort((a, b) => a.distance - b.distance)[0]?.other;
 }
 
 /** Restarts the regen delay. At zero health the vessel starts sinking. */
@@ -355,11 +473,11 @@ function fireVolleys(vessels: Vessel[], config: Config): Arrow[] {
     if (vessel.health === 0) continue;
     if (vessel.volleyTicks > 0) vessel.volleyTicks--;
     if (vessel.volleyTicks > 0) continue;
-    const target = vessels
-      .filter((other) => sideOf(other) !== sideOf(vessel) && other.health > 0)
-      .map((other) => ({ other, distance: Math.hypot(other.x - vessel.x, other.y - vessel.y) }))
-      .filter(({ distance }) => distance <= config.arrowRange)
-      .sort((a, b) => a.distance - b.distance)[0]?.other;
+    const target = closestInRange(
+      vessel,
+      vessels.filter((other) => sideOf(other) !== sideOf(vessel)),
+      config.arrowRange,
+    );
     if (!target) continue;
     const { volleySize, arrowDamage } = config.vesselClasses[vessel.vesselClass];
     const aim = bearing(vessel.x, vessel.y, target.x, target.y);

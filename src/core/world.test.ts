@@ -32,6 +32,12 @@ const config: Config = {
   arrowSpeed: 400,
   volleySeconds: 1,
   volleySpread: 0.1,
+  fireballDamage: 40,
+  fireballRange: 600,
+  fireballSpeed: 300,
+  fireballCooldownSeconds: 6,
+  fireballTurnRate: Math.PI / 2,
+  fireballBurnOutSeconds: 3,
   regenRate: 0.01,
   regenDelaySeconds: 3,
   enemyCircleRange: 0.9,
@@ -659,6 +665,106 @@ describe('Arrows', () => {
   });
 });
 
+describe('the Fireball', () => {
+  const throwing: Commands = { ...noCommands, throwFireball: true };
+  /** The still enemy is always in Fireball range, Arrows do no harm, and the enemy survives a Fireball. */
+  const inRange = withClasses({ ...still, fireballRange: 1200 }, { arrowDamage: 0 }, { health: 100, arrowDamage: 0 });
+  /** One harmless enemy that sails in and circles the still player vessel, so it crosses a Fireball's path. */
+  const circling: Config = withClasses({ ...harmless, waveCountdownSeconds: 1, waveSizeBase: 0 }, {}, { health: 100 });
+  const whileCircling = () => run(untilSpawned(createWorld(1, circling)), noCommands, 60 * 20);
+  const fireballEvents = (state: WorldState) => state.events.filter((event) => event.type.startsWith('fireball'));
+
+  it('follows the "closest" Targeting rule', () => {
+    const two: Config = { ...inRange, waveSizeBase: 1, fireballRange: 1500 };
+    // The target is picked on the tick after the Wave spawns.
+    const spawned = step(untilSpawned(createWorld(1, two)), noCommands);
+    const state = readState(spawned);
+    const closest = [...state.enemies].sort((a, b) => distanceBetween(a, state.player) - distanceBetween(b, state.player))[0];
+
+    expect(readState(createWorld(1, config)).targetingRule).toBe('closest');
+    expect(state.fireballTargetId).toBe(closest.id);
+    const [fireball] = readState(step(spawned, throwing)).fireballs;
+    expect(fireball).toMatchObject({ side: 'player', targetId: closest.id, damage: 40 });
+  });
+
+  it('launches one Fireball at the target in range and starts the cooldown, which blocks throws until it runs out', () => {
+    const thrown = step(untilSpawned(createWorld(1, inRange)), throwing);
+    const { player, enemies, fireballs } = readState(thrown);
+
+    expect(fireballs).toHaveLength(1);
+    expect(fireballs[0]).toMatchObject({ x: player.x, y: player.y });
+    expect(turnBetween(fireballs[0].heading, bearingTo(player, enemies[0]))).toBeCloseTo(0);
+    // fireballCooldownSeconds is 6 s, which is 360 ticks.
+    expect(player.fireballTicks).toBe(360);
+    // Held down through the cooldown, the throw never restarts it.
+    expect(readState(run(thrown, throwing, 359)).player.fireballTicks).toBe(1);
+    const ready = step(run(thrown, noCommands, 359), throwing);
+    expect(readState(ready).player.fireballTicks).toBe(360);
+    expect(readState(ready).fireballs).toHaveLength(1);
+  });
+
+  it('does nothing and keeps the cooldown ready when no enemy is in range', () => {
+    const countdown = step(createWorld(1, inRange), throwing);
+    const tooFar = step(untilSpawned(createWorld(1, { ...inRange, fireballRange: 500 })), throwing);
+
+    for (const world of [countdown, tooFar]) {
+      expect(readState(world)).toMatchObject({ fireballs: [], fireballTargetId: null, player: { fireballTicks: 0 } });
+    }
+    expect(readState(step(tooFar, throwing)).fireballs).toEqual([]);
+  });
+
+  it('curves toward a moving target no faster than the turn rate, and explodes on its first hit with the configured damage', () => {
+    let world = step(whileCircling(), throwing);
+    const [enemy] = readState(world).enemies;
+    let heading = readState(world).fireballs[0].heading;
+    let turned = 0;
+    while (readState(world).fireballs.length > 0) {
+      world = step(world, noCommands);
+      const [fireball] = readState(world).fireballs;
+      if (!fireball) break;
+      const turn = turnBetween(heading, fireball.heading);
+      // fireballTurnRate is 90 degrees a second.
+      expect(Math.abs(turn)).toBeLessThanOrEqual(Math.PI / 2 / 60 + 1e-9);
+      turned += turn;
+      heading = fireball.heading;
+    }
+    const state = readState(world);
+
+    expect(Math.abs(turned)).toBeGreaterThan(0.05);
+    expect(fireballEvents(state)).toEqual([{ type: 'fireballHit', vesselId: enemy.id, x: state.enemies[0].x, y: state.enemies[0].y }]);
+    expect(state.enemies[0].health).toBe(60);
+    expect(readState(step(world, noCommands)).enemies[0].health).toBe(60);
+  });
+
+  it('sinks an enemy it takes to zero health, which credits Gold', () => {
+    // Long enough in flight to reach the farthest spawn point.
+    const fragile = withClasses({ ...inRange, fireballBurnOutSeconds: 10 }, {}, { health: 40 });
+    const sunk = until(step(untilSpawned(createWorld(1, fragile)), throwing), (state) => state.enemies[0].health === 0);
+
+    expect(readState(sunk).events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'fireballHit' }),
+        expect.objectContaining({ type: 'vesselSunk' }),
+        expect.objectContaining({ type: 'goldCredited', gold: 5 }),
+      ]),
+    );
+  });
+
+  it('can miss a target that turns faster than it does, and then burns out after the set time', () => {
+    const sluggish: Config = { ...circling, fireballTurnRate: 0.1 };
+    let world = step(run(untilSpawned(createWorld(1, sluggish)), noCommands, 60 * 20), throwing);
+    expect(readState(world).fireballs).toHaveLength(1);
+    // fireballBurnOutSeconds is 3 s, which is 180 ticks.
+    world = run(world, noCommands, 179);
+    expect(readState(world).fireballs).toHaveLength(1);
+    world = step(world, noCommands);
+
+    expect(readState(world).fireballs).toEqual([]);
+    expect(fireballEvents(readState(world))).toEqual([{ type: 'fireballBurnedOut', x: expect.any(Number), y: expect.any(Number) }]);
+    expect(readState(world).enemies[0].health).toBe(100);
+  });
+});
+
 describe('sinking', () => {
   it('sinks a vessel at zero health, which stops shooting and taking hits, and is removed after the sinking time', () => {
     const fragile = withClasses(still, { arrowDamage: 10 }, { health: 10, arrowDamage: 0 });
@@ -674,7 +780,7 @@ describe('sinking', () => {
       world = step(world, noCommands);
       const state = readState(world);
       // Arrows already in flight fly on, through the wreck, but no new ones are fired.
-      expect(state.events.filter((event) => event.vesselId === wreck.id)).toEqual([]);
+      expect(state.events.filter((event) => 'vesselId' in event && event.vesselId === wreck.id)).toEqual([]);
       expect(arrowsOf(state, 'player').length).toBeLessThanOrEqual(arrowsOf(before, 'player').length);
       expect(arrowsOf(state, 'enemy').length).toBeLessThanOrEqual(arrowsOf(before, 'enemy').length);
       expect(state.enemies).toEqual([{ ...wreck, sinkingTicks: wreck.sinkingTicks - tick }]);

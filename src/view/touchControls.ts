@@ -2,7 +2,8 @@
 const FULL_RUDDER_DRAG_PX = 80;
 
 /**
- * The phone controls: a throttle lever on the right edge and a steering area on the left half.
+ * The phone controls: a throttle lever on the right edge with the Fireball button at its foot, and a
+ * steering area on the left half.
  * They are page elements that index.html shows only on touch devices. Pointer events give one
  * pointer per finger, so both thumbs work at once.
  */
@@ -16,6 +17,9 @@ export class TouchControls {
   private leverFill = document.getElementById('lever-fill')!;
   private leverValue = document.getElementById('lever-value')!;
   private shownPercent?: number;
+  /** True once the Fireball button is pressed, until the game takes the press. */
+  private fireballPressed = false;
+  private fireballButton = document.getElementById('fireball-button')!;
 
   constructor() {
     const lever = document.getElementById('throttle-lever')!;
@@ -27,6 +31,11 @@ export class TouchControls {
     lever.addEventListener('pointerdown', setLever);
     lever.addEventListener('pointermove', (event) => {
       if (event.buttons) setLever(event);
+    });
+
+    // A sibling of the lever, not inside it, so the thumb on the button never moves the lever.
+    this.fireballButton.addEventListener('pointerdown', () => {
+      this.fireballPressed = true;
     });
 
     const steering = document.getElementById('steering-area')!;
@@ -53,6 +62,20 @@ export class TouchControls {
     const throttle = this.leverThrottle;
     this.leverThrottle = undefined;
     return throttle;
+  }
+
+  /** Whether the Fireball button was pressed since the last call. */
+  takeFireball(): boolean {
+    const pressed = this.fireballPressed;
+    this.fireballPressed = false;
+    return pressed;
+  }
+
+  /** Shows the seconds left of the cooldown, or that no enemy is in range, or that a throw is ready. */
+  showFireball(cooldownSeconds: number, hasTarget: boolean): void {
+    const text = cooldownSeconds > 0 ? String(cooldownSeconds) : hasTarget ? 'Fire' : 'No target';
+    if (this.fireballButton.textContent !== text) this.fireballButton.textContent = text;
+    this.fireballButton.classList.toggle('waiting', cooldownSeconds > 0 || !hasTarget);
   }
 
   /** Moves the lever to the world's throttle, so it shows the value whatever set it. */

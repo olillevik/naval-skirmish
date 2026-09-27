@@ -76,11 +76,31 @@ test('the throttle lever and the steering area show on a touch screen', async ({
   await expect(page.getByTestId('throttle-lever')).toBeVisible();
   await expect(page.getByTestId('steering-area')).toBeVisible();
   await expect(page.getByTestId('throttle-value')).toHaveText('0%');
+  await expect(page.getByTestId('fireball-button')).toBeVisible();
+});
+
+test('tapping the Fireball button with an enemy in range throws a Fireball and shows the cooldown', async ({ page }) => {
+  // The Wave arrives after 5 s, and the enemies sail into Fireball range within a few more.
+  test.setTimeout(60_000);
+  await startRun(page, 'tap');
+  const button = page.getByTestId('fireball-button');
+  await expect(button).toHaveText('No target');
+  await page.waitForFunction(() => window.navalSkirmishTest!.state.fireballTargetId !== null, null, { timeout: 30_000 });
+  await expect(button).toHaveText('Fire');
+
+  await button.tap();
+  await page.waitForFunction(() => window.navalSkirmishTest!.state.fireballs.length > 0);
+
+  const { player, fireballs } = await page.evaluate(() => window.navalSkirmishTest!.state);
+  expect(fireballs).toHaveLength(1);
+  expect(player.fireballTicks).toBeGreaterThan(0);
+  await expect(button).toHaveText(/^[56]$/);
+  expect(player.throttle).toBe(0);
 });
 
 test('dragging the lever up sets the throttle, and it stays after the thumb lifts', async ({ page }) => {
   await startRun(page, 'tap');
-  const lever = await box(page, 'throttle-lever');
+  const lever = await box(page, 'lever-track');
   const touch = await touchscreen(page);
   const x = lever.x + lever.width / 2;
 
@@ -126,7 +146,7 @@ test('a long sideways drag turns faster than a short one, and lifting stops the 
 
 test('two thumbs steer and set the throttle at the same time', async ({ page }) => {
   await startRun(page, 'tap');
-  const lever = await box(page, 'throttle-lever');
+  const lever = await box(page, 'lever-track');
   const steering = await box(page, 'steering-area');
   const touch = await touchscreen(page);
   const leverX = lever.x + lever.width / 2;
@@ -135,7 +155,8 @@ test('two thumbs steer and set the throttle at the same time', async ({ page }) 
   await touch.down(1, steerStart);
   await touch.move(1, { x: steerStart.x - 150, y: steerStart.y });
   await touch.down(2, { x: leverX, y: lever.y + lever.height - 30 });
-  await touch.move(2, { x: leverX, y: lever.y + 10 });
+  // Past the top of the track, which is still on the lever and asks for full throttle.
+  await touch.move(2, { x: leverX, y: lever.y - 10 });
   await page.waitForTimeout(500);
   const bothHeld = await dinghy(page);
   await touch.up(1);

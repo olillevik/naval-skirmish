@@ -90,7 +90,26 @@ test('there are no touch controls on desktop', async ({ page }) => {
 
   await expect(page.getByTestId('throttle-lever')).toBeHidden();
   await expect(page.getByTestId('steering-area')).toBeHidden();
+  await expect(page.getByTestId('fireball-button')).toBeHidden();
 });
+
+for (const key of ['Digit1', 'Space']) {
+  test(`pressing ${key} with an enemy in range throws a Fireball and starts the cooldown`, async ({ page }) => {
+    // The Wave arrives after 5 s, and the enemies sail into Fireball range within a few more.
+    test.setTimeout(60_000);
+    await startRun(page);
+    await expect(page.getByTestId('fireball')).toHaveText('Fireball ready');
+    await page.waitForFunction(() => window.navalSkirmishTest!.state.fireballTargetId !== null, null, { timeout: 30_000 });
+
+    await page.keyboard.press(key);
+    await page.waitForFunction(() => window.navalSkirmishTest!.state.fireballs.length > 0);
+
+    const { player, fireballs } = await page.evaluate(() => window.navalSkirmishTest!.state);
+    expect(fireballs).toHaveLength(1);
+    expect(player.fireballTicks).toBeGreaterThan(0);
+    await expect(page.getByTestId('fireball')).toHaveText(/^Fireball in [56]$/);
+  });
+}
 
 test('the HUD counts down to Wave 1, which then spawns', async ({ page }) => {
   await startRun(page);

@@ -8,6 +8,7 @@ import {
   type Arrow,
   type Commands,
   type Config,
+  type Fireball,
   type Vessel,
   type World,
   type WorldEvent,
@@ -45,6 +46,9 @@ const HIT_FLASH_MS = 100;
 const ARROW_LENGTH = 12;
 const ARROW_WIDTH = 2;
 const ARROW_COLOUR = 0x3b2a1a;
+/** The pack's explosion sprites, smallest first, so the blast grows. */
+const EXPLOSION_FRAMES = ['explosion3', 'explosion2', 'explosion1'];
+const EXPLOSION_FPS = 15;
 const HEALTH_BAR_WIDTH = 40;
 const HEALTH_BAR_HEIGHT = 5;
 /** How far above an enemy's centre its health bar sits, px. */
@@ -70,9 +74,13 @@ export class GameScene extends Scene {
   private dinghy!: VesselSprite;
   /** Each enemy's sprite and mark, by vessel id. */
   private enemies = new Map<number, VesselSprite>();
+  /** One image per Fireball in flight, reused from frame to frame. */
+  private fireballs: GameObjects.Image[] = [];
   /** The Arrows and the enemies' health bars, drawn afresh each frame. */
   private overlay!: GameObjects.Graphics;
   private keys!: Keys;
+  /** True once 1 or Space is pressed, until the next tick takes the press. */
+  private fireballKeyPressed = false;
   private touch = new TouchControls();
   private accumulator = 0;
   private fall?: Tweens.Tween;
@@ -82,6 +90,7 @@ export class GameScene extends Scene {
   private countdownLabel = document.getElementById('countdown')!;
   private healthLabel = document.getElementById('health')!;
   private goldLabel = document.getElementById('gold')!;
+  private fireballLabel = document.getElementById('fireball')!;
   private scoreLabel = document.getElementById('score')!;
   private bestScoreLabel = document.getElementById('best-score')!;
   private endCauseLabel = document.getElementById('end-cause')!;
@@ -99,6 +108,7 @@ export class GameScene extends Scene {
     this.load.image('enemyDinghy2', `${base}assets/dinghySmall3.png`);
     this.load.image('water', `${base}assets/tile_73.png`);
     this.load.image('fire', `${base}assets/fire1.png`);
+    for (const frame of EXPLOSION_FRAMES) this.load.image(frame, `${base}assets/${frame}.png`);
   }
 
   create(): void {
@@ -110,6 +120,13 @@ export class GameScene extends Scene {
     this.overlay = this.add.graphics().setDepth(2);
     this.cameras.main.startFollow(this.dinghy.body);
     this.keys = this.input.keyboard!.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT') as Keys;
+    // An event, not the key's state, so a press that is over before the next tick still throws.
+    for (const key of ['keydown-ONE', 'keydown-SPACE']) {
+      this.input.keyboard!.on(key, (event: KeyboardEvent) => {
+        if (!event.repeat) this.fireballKeyPressed = true;
+      });
+    }
+    this.anims.create({ key: 'explosion', frames: EXPLOSION_FRAMES.map((key) => ({ key })), frameRate: EXPLOSION_FPS });
     this.draw([]);
     installTestHook(() => readState(this.world));
     this.showStartScreen();
@@ -126,17 +143,20 @@ export class GameScene extends Scene {
     // A frame can run several ticks, and each tick's events are only in the state until the next tick.
     const events: WorldEvent[] = [];
     if (this.accumulator >= TICK_SECONDS) {
-      const commands = this.readCommands();
+      let commands = this.readCommands();
       while (this.accumulator >= TICK_SECONDS) {
         this.world = step(this.world, commands);
+        // A press throws on one tick only.
+        commands = { ...commands, throwFireball: false };
         events.push(...readState(this.world).events);
         this.accumulator -= TICK_SECONDS;
       }
     }
 
-    const { run, player, endCause, score } = readState(this.world);
+    const { run, player, endCause, score, fireballTargetId } = readState(this.world);
     this.edgeWarning.hidden = !player.pastPointOfNoReturn || run === 'ended';
     this.touch.showThrottle(player.throttle);
+    this.touch.showFireball(cooldownSeconds(player), fireballTargetId !== null);
     // Once the dinghy has crossed the Edge or started sinking, that animation owns its scale, alpha and rotation.
     if (!this.fall) this.draw(events);
     if (run !== 'sailing' && !this.fall) {
@@ -156,6 +176,8 @@ export class GameScene extends Scene {
     this.world = createWorld(Date.now(), defaultConfig);
     this.accumulator = 0;
     this.touch.takeThrottle();
+    this.touch.takeFireball();
+    this.takeFireballKey();
     this.touch.showThrottle(0);
     this.fall?.remove();
     this.fall = undefined;
@@ -192,7 +214,14 @@ export class GameScene extends Scene {
       throttleDown: k.S.isDown || k.DOWN.isDown,
       rudder: Number(right) - Number(left) + this.touch.rudder,
       setThrottle: this.touch.takeThrottle(),
+      throwFireball: this.takeFireballKey() || this.touch.takeFireball(),
     };
+  }
+
+  private takeFireballKey(): boolean {
+    const pressed = this.fireballKeyPressed;
+    this.fireballKeyPressed = false;
+    return pressed;
   }
 
   /**
@@ -234,19 +263,23 @@ export class GameScene extends Scene {
   }
 
   private draw(events: WorldEvent[]): void {
-    const { player, enemies, arrows, wave, waveStatus, countdown, gold } = readState(this.world);
+    const { player, enemies, arrows, fireballs, wave, waveStatus, countdown, gold } = readState(this.world);
     this.drawVessel(this.dinghy, player);
     this.overlay.clear();
     this.drawEnemies(enemies, events);
     this.drawArrows(arrows);
+    this.drawFireballs(fireballs);
     for (const event of events) {
-      if (event.type === 'arrowHit') this.flashHit(event.vesselId === player.id ? this.dinghy : this.enemies.get(event.vesselId));
+      if (event.type === 'fireballHit') this.explode(event.x, event.y);
+      if (event.type === 'arrowHit' || event.type === 'fireballHit') this.flashHit(event.vesselId === player.id ? this.dinghy : this.enemies.get(event.vesselId));
     }
     setText(this.waveLabel, `Wave ${wave}`);
     this.countdownLabel.hidden = waveStatus !== 'countdown';
     setText(this.countdownLabel, `starts in ${Math.ceil(countdown)}`);
     setText(this.healthLabel, `Health ${Math.ceil(player.health)}`);
     setText(this.goldLabel, `Gold ${gold}`);
+    const cooldown = cooldownSeconds(player);
+    setText(this.fireballLabel, cooldown > 0 ? `Fireball in ${cooldown}` : 'Fireball ready');
   }
 
   /**
@@ -255,7 +288,7 @@ export class GameScene extends Scene {
    */
   private drawEnemies(enemies: Vessel[], events: WorldEvent[]): void {
     for (const event of events) {
-      const sprite = this.enemies.get(event.vesselId);
+      const sprite = 'vesselId' in event ? this.enemies.get(event.vesselId) : undefined;
       if (!sprite) continue;
       if (event.type === 'vesselSunk') this.sink(sprite);
       if (event.type === 'vesselOverEdge') {
@@ -309,6 +342,24 @@ export class GameScene extends Scene {
     }
   }
 
+  /** Each Fireball is the pack's fire sprite, with the flames trailing behind it. */
+  private drawFireballs(fireballs: Fireball[]): void {
+    while (this.fireballs.length < fireballs.length) {
+      this.fireballs.push(this.add.image(0, 0, 'fire').setDepth(2));
+    }
+    for (const [i, image] of this.fireballs.entries()) {
+      const fireball = fireballs[i];
+      image.setVisible(fireball !== undefined);
+      // The sprite's flames point up the screen, and heading 0 points up, so the flames trail when turned round.
+      if (fireball) image.setPosition(fireball.x, fireball.y).setRotation(fireball.heading + Math.PI);
+    }
+  }
+
+  private explode(x: number, y: number): void {
+    const blast = this.add.sprite(x, y, EXPLOSION_FRAMES[0]).setDepth(2).play('explosion');
+    blast.once('animationcomplete', () => blast.destroy());
+  }
+
   private flashHit(sprite: VesselSprite | undefined): void {
     if (!sprite || sprite.sinking) return;
     sprite.hull.setTint(HIT_TINT);
@@ -350,6 +401,11 @@ function saveBestScore(score: number): number {
     // A browser that blocks storage still gets a game-over screen.
   }
   return score;
+}
+
+/** The Captain's Fireball cooldown in whole seconds, rounded up. 0 means ready. */
+function cooldownSeconds(player: Vessel): number {
+  return Math.ceil(player.fireballTicks * TICK_SECONDS);
 }
 
 /** Writes to the page only when the text changes. */
