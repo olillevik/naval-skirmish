@@ -1,0 +1,26 @@
+{
+  "dinghy": {
+    "frameWidth": 64,
+    "frameHeight": 64
+  },
+  "ship-black": {
+    "frameWidth": 120,
+    "frameHeight": 168
+  },
+  "ship-red": {
+    "frameWidth": 120,
+    "frameHeight": 168
+  },
+  "ship-green": {
+    "frameWidth": 120,
+    "frameHeight": 168
+  },
+  "ship-blue": {
+    "frameWidth": 120,
+    "frameHeight": 168
+  },
+  "ship-yellow": {
+    "frameWidth": 120,
+    "frameHeight": 168
+  }
+}

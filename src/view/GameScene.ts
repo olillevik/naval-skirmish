@@ -13,12 +13,11 @@ import {
   type World,
   type WorldEvent,
 } from '../core/world';
+import { frameForHeading } from './directionalSprite';
+import kitSheets from './kitSheets.json';
 import { installTestHook } from './testHook';
 import { TouchControls } from './touchControls';
 
-const DINGHY_SCALE = 2;
-/** The pack's sprites point their bow down the screen; heading 0 points up. */
-const SPRITE_ROTATION = Math.PI;
 /** Longest frame we catch up on, so a backgrounded tab doesn't run thousands of ticks. */
 const MAX_FRAME_SECONDS = 0.25;
 /** Must match the game's background colour in main.ts. */
@@ -32,15 +31,11 @@ const RING_SEGMENTS = 256;
 const SPACE_DEPTH = 2500;
 const STARS_PER_SQUARE_PX = 1 / 15000;
 /**
- * Enemy ships use the pack's coloured ship sprites, by the number in the pack's file name: black, red, green,
- * blue and yellow. The white ship is left out, as the closest to the player's plain dinghy. Each colour has
- * 4 damage states, from whole to wreck, 6 numbers apart.
+ * The vessels are the Pirate Kit's 3D models, rendered by scripts/render-sprites into one sheet each, with a
+ * frame per heading. Enemy ships come in black, red, green, blue and yellow sails. The kit's white sails are
+ * left out, as the closest to the player's plain dinghy.
  */
-const ENEMY_SHIP_COLOURS = [2, 3, 4, 5, 6];
-const SHIP_DAMAGE_STATES = 4;
-const SHIP_DAMAGE_STEP = 6;
-/** Enemy dinghies use the pack's other dinghy sprites, over a red ring, so the player's dinghy stands out. */
-const ENEMY_DINGHY_SPRITES = ['enemyDinghy1', 'enemyDinghy2'];
+const ENEMY_SHIP_SHEETS = ['ship-black', 'ship-red', 'ship-green', 'ship-blue', 'ship-yellow'];
 const ENEMY_MARK_COLOUR = 0xd62f2f;
 /** The ring is a little wider than the collision circle, so it shows around the hull. */
 const ENEMY_MARK_SCALE = 1.4;
@@ -53,7 +48,7 @@ const WIZARD_COLOUR = 0xa64dff;
 const WIZARD_GLOW_SCALE = 1.8;
 const WIZARD_GLOW_PULSE_MS = 800;
 const WIZARD_FLAG_SCALE = 2;
-/** A dinghy below this share of its max health shows fire, since the pack has no damaged dinghy sprites. */
+/** A vessel below this share of its max health shows fire, since the kit has no damaged hulls. */
 const FIRE_BELOW = 0.4;
 /** Small enough that the hull shows around the flames. */
 const FIRE_SCALE = 0.6;
@@ -76,16 +71,14 @@ const HEALTH_BAR_BACK_COLOUR = 0x2b0b0b;
 const BEST_SCORE_KEY = 'naval-skirmish.bestScore';
 const END_CAUSE_TEXT = { sank: 'The dinghy sank', 'fell off the Edge': 'The dinghy fell off the Edge' };
 
-/** A vessel's hull and fire, which turn with it, inside a container that the fall and the wreck fade animate. */
+/** A vessel's hull and fire, inside a container that the fall and the wreck fade animate. */
 interface VesselSprite {
   body: GameObjects.Container;
   hull: GameObjects.Image;
   fire: GameObjects.Image;
   sinking: boolean;
-  /** A ship's hull textures, from whole to wreck. Dinghies have none, and show fire instead. */
-  damageStates?: string[];
-  /** A Wizard vessel's glow ring and flag. */
-  wizard?: { glow: GameObjects.Arc; flag: GameObjects.Image };
+  /** A Wizard vessel's glow ring, which pulses. */
+  wizardGlow?: GameObjects.Arc;
 }
 
 type Keys = Record<'W' | 'A' | 'S' | 'D' | 'UP' | 'DOWN' | 'LEFT' | 'RIGHT', Input.Keyboard.Key>;
@@ -124,14 +117,13 @@ export class GameScene extends Scene {
 
   preload(): void {
     const base = import.meta.env.BASE_URL;
-    this.load.image('dinghy', `${base}assets/dinghySmall1.png`);
-    this.load.image('enemyDinghy1', `${base}assets/dinghySmall2.png`);
-    this.load.image('enemyDinghy2', `${base}assets/dinghySmall3.png`);
+    for (const [sheet, frameSize] of Object.entries(kitSheets)) {
+      this.load.spritesheet(sheet, `${base}assets/kit/${sheet}.png`, frameSize);
+    }
     this.load.image('water', `${base}assets/tile_73.png`);
     this.load.image('fire', `${base}assets/fire1.png`);
     this.load.image('wizardFlag', `${base}assets/flag1.png`);
     for (const frame of EXPLOSION_FRAMES) this.load.image(frame, `${base}assets/${frame}.png`);
-    for (const texture of ENEMY_SHIP_COLOURS.flatMap(shipDamageStates)) this.load.image(texture, `${base}assets/${texture}.png`);
   }
 
   create(): void {
@@ -338,52 +330,49 @@ export class GameScene extends Scene {
   }
 
   private addEnemyDinghySprite(enemy: Vessel): VesselSprite {
-    const sprite = this.addVesselSprite(ENEMY_DINGHY_SPRITES[enemy.id % ENEMY_DINGHY_SPRITES.length]);
+    // The same model as the player's dinghy, over a red ring, so the player's dinghy stands out.
+    const sprite = this.addVesselSprite('dinghy');
     const radius = defaultConfig.vesselClasses[enemy.vesselClass].radius * ENEMY_MARK_SCALE;
     sprite.body.addAt(this.add.circle(0, 0, radius, ENEMY_MARK_COLOUR, 0.35).setStrokeStyle(3, ENEMY_MARK_COLOUR), 0);
     return sprite;
   }
 
   private addShipSprite(enemy: Vessel): VesselSprite {
-    const damageStates = shipDamageStates(ENEMY_SHIP_COLOURS[enemy.id % ENEMY_SHIP_COLOURS.length]);
-    return { ...this.addVesselSprite(damageStates[0], 1), damageStates };
+    return this.addVesselSprite(ENEMY_SHIP_SHEETS[enemy.id % ENEMY_SHIP_SHEETS.length]);
   }
 
-  /** The glow ring goes under everything else in the vessel, and the flag over it. */
+  /** The glow ring goes under everything else in the vessel, and the flag over it, to the right of the health bar. */
   private addWizardMarks(sprite: VesselSprite, enemy: Vessel): void {
-    const radius = defaultConfig.vesselClasses[enemy.vesselClass].radius * WIZARD_GLOW_SCALE;
-    const glow = this.add.circle(0, 0, radius, WIZARD_COLOUR, 0.3).setStrokeStyle(4, WIZARD_COLOUR);
-    const flag = this.add.image(0, 0, 'wizardFlag').setScale(WIZARD_FLAG_SCALE).setOrigin(0.5, 1).setTint(WIZARD_COLOUR);
+    const { radius } = defaultConfig.vesselClasses[enemy.vesselClass];
+    const glow = this.add.circle(0, 0, radius * WIZARD_GLOW_SCALE, WIZARD_COLOUR, 0.3).setStrokeStyle(4, WIZARD_COLOUR);
+    const flag = this.add
+      .image(HEALTH_BAR_WIDTH / 2 + 6, -radius * HEALTH_BAR_OFFSET + HEALTH_BAR_HEIGHT, 'wizardFlag')
+      .setScale(WIZARD_FLAG_SCALE)
+      .setOrigin(0.5, 1)
+      .setTint(WIZARD_COLOUR);
     sprite.body.addAt(glow, 0);
     sprite.body.add(flag);
-    sprite.wizard = { glow, flag };
+    sprite.wizardGlow = glow;
   }
 
-  private addVesselSprite(texture: string, scale = DINGHY_SCALE): VesselSprite {
-    const hull = this.add.image(0, 0, texture).setScale(scale);
+  private addVesselSprite(sheet: string): VesselSprite {
+    const hull = this.add.image(0, 0, sheet);
     const fire = this.add.image(0, 0, 'fire').setScale(FIRE_SCALE).setVisible(false);
     return { body: this.add.container(0, 0, [hull, fire]), hull, fire, sinking: false };
   }
 
   private drawVessel(sprite: VesselSprite, vessel: Vessel): void {
-    sprite.body.setPosition(vessel.x, vessel.y).setRotation(vessel.heading + SPRITE_ROTATION);
-    if (sprite.damageStates) sprite.hull.setTexture(sprite.damageStates[shipDamageState(vessel)]);
-    // A ship shows its damage on the hull, so only its wreck burns.
-    const burning = sprite.damageStates ? vessel.health === 0 : vessel.health < vessel.maxHealth * FIRE_BELOW;
-    // The flames stay upright on the screen as the hull turns.
-    sprite.fire.setVisible(burning).setRotation(-sprite.body.rotation);
-    if (sprite.wizard) this.drawWizardMarks(sprite.wizard, sprite.body.rotation, vessel);
+    // The container never turns, except in the fall. The hull shows the heading by its frame instead.
+    sprite.body.setPosition(vessel.x, vessel.y);
+    sprite.hull.setFrame(frameForHeading(vessel.heading));
+    sprite.fire.setVisible(vessel.health < vessel.maxHealth * FIRE_BELOW);
+    if (sprite.wizardGlow) this.drawWizardGlow(sprite.wizardGlow);
   }
 
-  /** The glow pulses with the clock. The flag stays upright on the screen, to the right of the health bar. */
-  private drawWizardMarks({ glow, flag }: NonNullable<VesselSprite['wizard']>, rotation: number, vessel: Vessel): void {
+  /** The glow pulses with the clock. */
+  private drawWizardGlow(glow: GameObjects.Arc): void {
     const pulse = (1 + Math.sin((this.time.now / WIZARD_GLOW_PULSE_MS) * Math.PI * 2)) / 2;
     glow.setAlpha(0.5 + pulse * 0.5).setScale(0.9 + pulse * 0.2);
-    // The flag is in the vessel's container, so its place on the screen is turned back by the vessel's rotation.
-    const x = HEALTH_BAR_WIDTH / 2 + 6;
-    const y = -defaultConfig.vesselClasses[vessel.vesselClass].radius * HEALTH_BAR_OFFSET + HEALTH_BAR_HEIGHT;
-    const [cos, sin] = [Math.cos(-rotation), Math.sin(-rotation)];
-    flag.setPosition(x * cos - y * sin, x * sin + y * cos).setRotation(-rotation);
   }
 
   private drawHealthBar({ x, y, health, maxHealth, vesselClass }: Vessel): void {
@@ -427,11 +416,10 @@ export class GameScene extends Scene {
     });
   }
 
-  /** The wreck: a dark, burning hull that fades out over the sinking time. A ship has a wreck sprite of its own. */
+  /** The wreck: a dark, burning hull that fades out over the sinking time. */
   private sink(sprite: VesselSprite): Tweens.Tween {
     sprite.sinking = true;
-    if (sprite.damageStates) sprite.hull.clearTint();
-    else sprite.hull.setTint(WRECK_TINT);
+    sprite.hull.setTint(WRECK_TINT);
     sprite.fire.setVisible(true);
     return this.tweens.add({ targets: sprite.body, alpha: 0, duration: defaultConfig.sinkingSeconds * 1000 });
   }
@@ -461,17 +449,6 @@ function saveBestScore(score: number): number {
     // A browser that blocks storage still gets a game-over screen.
   }
   return score;
-}
-
-/** The texture keys of one ship colour's damage states, from whole to wreck, named as in public/assets. */
-function shipDamageStates(colour: number): string[] {
-  return Array.from({ length: SHIP_DAMAGE_STATES }, (_, i) => `ship${colour + i * SHIP_DAMAGE_STEP}`);
-}
-
-/** Whole above 2/3 of max health, then the two damaged states by thirds, and the wreck at zero. */
-function shipDamageState({ health, maxHealth }: Vessel): number {
-  if (health === 0) return SHIP_DAMAGE_STATES - 1;
-  return Math.min(SHIP_DAMAGE_STATES - 2, Math.floor((1 - health / maxHealth) * (SHIP_DAMAGE_STATES - 1)));
 }
 
 /** The Captain's Fireball cooldown in whole seconds, rounded up. 0 means ready. */

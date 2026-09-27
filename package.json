@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "render-sprites": "node scripts/render-sprites/run.ts"
   },
   "dependencies": {
     "phaser": "^4.2.1"
@@ -17,6 +18,8 @@
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@types/node": "^26.6.3",
+    "@types/three": "^0.186.0",
+    "three": "^0.186.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.1",
     "vitest": "^5.0.2"
