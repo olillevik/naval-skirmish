@@ -9,6 +9,7 @@ import {
   type CabinItemName,
   type Commands,
   type Config,
+  type TargetingRule,
   type VesselClass,
   type World,
   type WorldState,
@@ -68,6 +69,9 @@ const config: Config = {
     volleySize: { prices: [30, 60, 120, 240], arrows: 1 },
     fireballDamage: { prices: [30, 60, 120], damage: [55, 70, 90] },
     fireballCooldown: { prices: [30, 60, 120], cooldownSeconds: [5, 4, 3] },
+    farthest: { prices: [25] },
+    lowestHealth: { prices: [25] },
+    highestHealth: { prices: [25] },
   },
 };
 const noCommands: Commands = { throttleUp: false, throttleDown: false, rudder: 0 };
@@ -1267,6 +1271,9 @@ const noPurchases = [
   { item: 'volleySize', level: 0, highestLevel: 4, nextPrice: 30, canBuy: false },
   { item: 'fireballDamage', level: 0, highestLevel: 3, nextPrice: 30, canBuy: false },
   { item: 'fireballCooldown', level: 0, highestLevel: 3, nextPrice: 30, canBuy: false },
+  { item: 'farthest', level: 0, highestLevel: 1, nextPrice: 25, canBuy: false },
+  { item: 'lowestHealth', level: 0, highestLevel: 1, nextPrice: 25, canBuy: false },
+  { item: 'highestHealth', level: 0, highestLevel: 1, nextPrice: 25, canBuy: false },
 ];
 
 describe('the Cabin', () => {
@@ -1540,7 +1547,132 @@ describe('Upgrades', () => {
     expect(itemOf(upgraded, 'maxHealth').level).toBe(1);
 
     const fresh = createWorld(1, rich(0));
-    expect(readState(fresh).cabin.map(({ level }) => level)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+    expect(readState(fresh).cabin.map(({ level }) => level)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     expect(readState(fresh).player.maxHealth).toBe(100);
+  });
+});
+
+describe('Targeting rules', () => {
+  const extraRules = ['farthest', 'lowestHealth', 'highestHealth'] as const;
+  const throwing: Commands = { ...noCommands, throwFireball: true };
+  const setRule = (world: World, rule: TargetingRule) => applyCabinAction(world, { type: 'setTargetingRule', rule });
+  const buyAll = (world: World) => extraRules.reduce((bought, item) => applyCabinAction(bought, { type: 'buy', item }), world);
+  /**
+   * Wave 1 is one still enemy dinghy worth 1000 Gold, which the player's first Arrow sinks. Wave 2 is two still
+   * enemy dinghies and an enemy ship, none of which hurts the player. With seed 5, one dinghy is 661 px from the
+   * player, the other 748 px, and the ship 1006 px.
+   */
+  const known = (fireballRange: number) =>
+    withClasses(
+      { ...still, regenRate: 0, shipsFromWave: 2, fireballRange },
+      { arrowDamage: 20 },
+      { health: 10, arrowDamage: 0, gold: 1000 },
+    );
+  /** The world on the tick after Wave 2 spawns, which is when the Captain first has a target. */
+  const wave2 = (world: World) => step(until(world, (state) => state.wave === 2 && state.waveStatus === 'fighting'), noCommands);
+  /** Wave 2's enemies: the closer and the farther dinghy, and the ship. */
+  const enemiesOf = (world: World) => {
+    const { enemies, player } = readState(world);
+    const [near, far] = enemies
+      .filter((enemy) => enemy.vesselClass === 'enemyDinghy')
+      .sort((a, b) => distanceBetween(a, player) - distanceBetween(b, player));
+    const ship = enemies.find((enemy) => enemy.vesselClass === 'enemyShip')!;
+    return { near, far, ship, player };
+  };
+  const rich = (fireballRange: number) => until(untilSpawned(createWorld(5, known(fireballRange))), (state) => state.gold > 0);
+
+  it('start a Run owning only "closest", which is active', () => {
+    expect(readState(createWorld(1, config))).toMatchObject({ targetingRules: ['closest'], targetingRule: 'closest' });
+  });
+
+  it('cost 25 Gold each, can be bought once, and then show as owned and are listed', () => {
+    const start = rich(1200);
+    expect(readState(start).gold).toBe(1000);
+
+    let world = start;
+    for (const [bought, item] of extraRules.entries()) {
+      const itemOf = (current: World) => readState(current).cabin.find((entry) => entry.item === item);
+      expect(itemOf(world)).toMatchObject({ level: 0, highestLevel: 1, nextPrice: 25, canBuy: true });
+      world = applyCabinAction(world, { type: 'buy', item });
+      expect(readState(world).gold).toBe(1000 - 25 * (bought + 1));
+      expect(itemOf(world)).toMatchObject({ level: 1, nextPrice: null, canBuy: false });
+      expect(applyCabinAction(world, { type: 'buy', item })).toBe(world);
+    }
+    expect(readState(world)).toMatchObject({ targetingRules: ['closest', ...extraRules], targetingRule: 'closest' });
+  });
+
+  it("refuse a rule the player doesn't own, leaving the world unchanged", () => {
+    const world = rich(1200);
+
+    for (const rule of extraRules) expect(setRule(world, rule)).toBe(world);
+    const owned = applyCabinAction(world, { type: 'buy', item: 'farthest' });
+    expect(setRule(owned, 'highestHealth')).toBe(owned);
+    expect(readState(setRule(owned, 'farthest')).targetingRule).toBe('farthest');
+  });
+
+  it('refuse any rule once the player vessel is sinking, and after the Run ends', () => {
+    const doomed = withClasses(still, { health: 5, arrowDamage: 0 }, { arrowDamage: 10 });
+    const sinking = until(untilSpawned(createWorld(1, doomed)), (state) => state.run === 'sinking');
+    const ended = until(sinking, (state) => state.run === 'ended');
+
+    for (const world of [sinking, ended]) expect(setRule(world, 'closest')).toBe(world);
+  });
+
+  it('take no time to set, and the rule stays until the player sets another', () => {
+    const bought = buyAll(rich(1200));
+    const before = readState(bought);
+
+    const set = setRule(bought, 'farthest');
+
+    expect(readState(set)).toEqual({ ...before, targetingRule: 'farthest' });
+    expect(readState(wave2(set)).targetingRule).toBe('farthest');
+    expect(readState(setRule(wave2(set), 'closest')).targetingRule).toBe('closest');
+  });
+
+  it('each pick the right enemy of a known Wave, and ties go to the closest', () => {
+    const bought = buyAll(rich(1200));
+    const { near, ship, player } = enemiesOf(wave2(bought));
+    expect(distanceBetween(near, player)).toBeCloseTo(661, 0);
+
+    const picks = Object.fromEntries(
+      (['closest', ...extraRules] as const).map((rule) => [rule, readState(wave2(setRule(bought, rule))).fireballTargetId]),
+    );
+
+    // The two dinghies have the same health, so "lowest health" is a tie between them.
+    expect(picks).toEqual({ closest: near.id, farthest: ship.id, lowestHealth: near.id, highestHealth: ship.id });
+    // The Captain throws at the rule's pick.
+    const [fireball] = readState(step(wave2(setRule(bought, 'highestHealth')), throwing)).fireballs;
+    expect(fireball.targetId).toBe(ship.id);
+  });
+
+  it('count only enemies within Fireball range', () => {
+    // The ship, which is farthest away and has the most health, is out of range.
+    const bought = buyAll(rich(900));
+    const { near, far, ship, player } = enemiesOf(wave2(bought));
+    expect(distanceBetween(far, player)).toBeLessThan(900);
+    expect(distanceBetween(ship, player)).toBeGreaterThan(900);
+
+    const pick = (rule: TargetingRule) => readState(wave2(setRule(bought, rule))).fireballTargetId;
+
+    expect(pick('farthest')).toBe(far.id);
+    // A tie between the two dinghies.
+    expect(pick('highestHealth')).toBe(near.id);
+  });
+
+  it('make a Fireball whose target is lost pick a new target by the active rule', () => {
+    // The Captain throws at the closer dinghy, and the Crew's faster Arrow sinks it before the Fireball gets there.
+    const bought = buyAll(rich(1200));
+    const thrown = step(wave2(bought), throwing);
+    const { near, ship } = enemiesOf(thrown);
+    expect(readState(thrown).fireballs[0].targetId).toBe(near.id);
+
+    const afterLoss = (world: World) => {
+      const lost = until(world, (state) => state.enemies.find((enemy) => enemy.id === near.id)!.health === 0);
+      return readState(step(lost, noCommands)).fireballs[0];
+    };
+
+    expect(afterLoss(setRule(thrown, 'highestHealth')).targetId).toBe(ship.id);
+    // Under "closest" it goes for the other dinghy instead.
+    expect(afterLoss(thrown).targetId).not.toBe(ship.id);
   });
 });

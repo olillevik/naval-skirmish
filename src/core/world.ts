@@ -103,6 +103,10 @@ export interface Config {
     fireballDamage: CabinItemConfig & { damage: number[] };
     /** The Captain's Fireball cooldown at each level from 1, in seconds. Level 0 is fireballCooldownSeconds. */
     fireballCooldown: CabinItemConfig & { cooldownSeconds: number[] };
+    /** Each unlocks the Targeting rule of the same name. */
+    farthest: CabinItemConfig;
+    lowestHealth: CabinItemConfig;
+    highestHealth: CabinItemConfig;
   };
 }
 
@@ -112,7 +116,15 @@ export interface CabinItemConfig {
 }
 
 /** The items the player can buy in the Cabin, in the order the Cabin lists them. */
-export type CabinItemName = 'repair' | 'maxHealth' | 'regen' | 'arrowRate' | 'volleySize' | 'fireballDamage' | 'fireballCooldown';
+export type CabinItemName =
+  | 'repair'
+  | 'maxHealth'
+  | 'regen'
+  | 'arrowRate'
+  | 'volleySize'
+  | 'fireballDamage'
+  | 'fireballCooldown'
+  | Exclude<TargetingRule, 'closest'>;
 
 /** One Cabin item as the player sees it, so the view works out no rules of its own. */
 export interface CabinItem {
@@ -128,7 +140,7 @@ export interface CabinItem {
 }
 
 /** What the player does in the Cabin. Applying one takes no time. */
-export type CabinAction = { type: 'buy'; item: CabinItemName };
+export type CabinAction = { type: 'buy'; item: CabinItemName } | { type: 'setTargetingRule'; rule: TargetingRule };
 
 /** The player sails a smallDinghy. Enemy dinghies sail the same boat, but are weaker. Enemy ships join later Waves. */
 export type VesselClassName = 'smallDinghy' | 'enemyDinghy' | 'enemyShip';
@@ -205,15 +217,25 @@ export interface Fireball {
   x: number;
   y: number;
   heading: number;
-  /** The vessel the Targeting rule picked. Once that vessel sinks or is lost, the Fireball flies straight on. */
+  /**
+   * The vessel the Targeting rule picked. Once that vessel sinks or is lost, one of the Captain's Fireballs picks
+   * a new target within Fireball range of itself by the active Targeting rule. A Fireball with no target flies straight on.
+   */
   targetId: number;
   damage: number;
   /** Ticks left before it burns out. */
   burnTicks: number;
 }
 
-/** How the Captain picks the enemy a Fireball goes for. Always closest in this milestone. */
-export type TargetingRule = 'closest';
+/**
+ * How the Captain picks the enemy a Fireball goes for, among the enemies within Fireball range. Ties go to the
+ * closest. A Run starts owning only closest. The Cabin sells the others, each unlocked by the item of the same name.
+ */
+export type TargetingRule = 'closest' | 'farthest' | 'lowestHealth' | 'highestHealth';
+
+const targetingRules: TargetingRule[] = ['closest', 'farthest', 'lowestHealth', 'highestHealth'];
+
+const ownsRule = (levels: CabinLevels, rule: TargetingRule) => rule === 'closest' || levels[rule] > 0;
 
 /** Something that happened during the last tick, for the view's effects. */
 export type WorldEvent =
@@ -247,7 +269,10 @@ export interface WorldState {
   enemies: Vessel[];
   arrows: Arrow[];
   fireballs: Fireball[];
+  /** The active Targeting rule. It stays until the player sets another in the Cabin. */
   targetingRule: TargetingRule;
+  /** The Targeting rules the player owns, in the order the Cabin lists them. */
+  targetingRules: TargetingRule[];
   /** The enemy the Targeting rule picks within Fireball range after the last tick, or null when there is none. */
   fireballTargetId: number | null;
   run: RunStatus;
@@ -285,8 +310,8 @@ export type CabinLevels = Readonly<Record<CabinItemName, number>>;
 export interface World {
   readonly seed: number;
   readonly config: Config;
-  /** The state without the Cabin items, which readState works out from the levels. */
-  readonly state: Omit<WorldState, 'cabin'>;
+  /** The state without the Cabin items and the owned Targeting rules, which readState works out from the levels. */
+  readonly state: Omit<WorldState, 'cabin' | 'targetingRules'>;
   /** The levels bought of each Cabin item in this Run. */
   readonly cabinLevels: CabinLevels;
   /** Ticks spent falling or sinking so far. */
@@ -310,7 +335,13 @@ export function createWorld(seed: number, config: Config): World {
     random: seed,
     nextId: 1,
     touching: [],
-    cabinLevels: { repair: 0, maxHealth: 0, regen: 0, arrowRate: 0, volleySize: 0, fireballDamage: 0, fireballCooldown: 0 },
+    cabinLevels: {
+      repair: 0, maxHealth: 0, regen: 0, arrowRate: 0, volleySize: 0, fireballDamage: 0,
+      fireballCooldown: 0,
+      farthest: 0,
+      lowestHealth: 0,
+      highestHealth: 0,
+    },
     state: {
       player: newVessel(0, 'smallDinghy', 0, 0, 0, config),
       enemies: [],
@@ -368,7 +399,8 @@ function countdownTicksFor(config: Config): number {
 
 export function readState(world: World): WorldState {
   const cabin = (Object.keys(cabinRules) as CabinItemName[]).map((item) => cabinItem(world, item));
-  return { ...world.state, cabin };
+  const owned = targetingRules.filter((rule) => ownsRule(world.cabinLevels, rule));
+  return { ...world.state, targetingRules: owned, cabin };
 }
 
 /** The Cabin rules for each item. Tuning numbers stay in the config. */
@@ -406,6 +438,9 @@ const cabinRules: Record<CabinItemName, CabinRule> = {
   volleySize: upgrade,
   fireballDamage: upgrade,
   fireballCooldown: upgrade,
+  farthest: upgrade,
+  lowestHealth: upgrade,
+  highestHealth: upgrade,
 };
 
 /**
@@ -439,9 +474,14 @@ function cabinItem(world: World, item: CabinItemName): CabinItem {
 
 /**
  * Applies what the player does in the Cabin, with no time passing. An action that isn't allowed, such as
- * one without enough Gold or once the player vessel is no longer afloat, returns the world unchanged.
+ * one without enough Gold, a Targeting rule the player doesn't own, or any action once the player vessel
+ * is no longer afloat, returns the world unchanged.
  */
 export function applyCabinAction(world: World, action: CabinAction): World {
+  if (action.type === 'setTargetingRule') {
+    const allowed = world.state.run === 'sailing' && ownsRule(world.cabinLevels, action.rule);
+    return allowed ? { ...world, state: { ...world.state, targetingRule: action.rule } } : world;
+  }
   const { item } = action;
   const { canBuy, nextPrice } = cabinItem(world, item);
   if (!canBuy || nextPrice === null) return world;
@@ -484,10 +524,10 @@ export function step(world: World, commands: Commands): World {
   const touching = ram(moved, world.touching, config, events);
   const afloat = pushApart(moved, config).map((vessel) => feelRimCurrent(vessel, config));
   const arrows = [...flyArrows(state.arrows, afloat, config, events), ...fireVolleys(afloat, world.cabinLevels, config)];
-  const flying = flyFireballs(state.fireballs, afloat, config, events);
+  const flying = flyFireballs(state.fireballs, afloat, state.targetingRule, config, events);
 
   const [player, ...enemies] = afloat;
-  const target = closestInRange(player, enemies, config.fireballRange);
+  const target = pickTarget(player, enemies, config.fireballRange, state.targetingRule);
   const fireballs = [...flying, ...throwFireball(player, target, commands, stats, config), ...throwWizardFireballs(enemies, player, config)];
   const overEdge = (vessel: Vessel) => Math.hypot(vessel.x, vessel.y) >= config.arenaRadius;
   for (const vessel of afloat) {
@@ -568,14 +608,17 @@ function firstHit(shot: Arrow | Fireball, dx: number, dy: number, vessels: Vesse
 
 /**
  * Turns each Fireball toward its target by at most one tick of the Fireball turn rate, then moves it one
- * tick. A Fireball that touches a vessel on the other side explodes on the first one it reaches. One that
+ * tick. One of the Captain's Fireballs whose target is lost picks a new one by the Targeting rule. A Fireball that touches a vessel on the other side explodes on the first one it reaches. One that
  * has flown for the burn-out time burns out.
  */
-function flyFireballs(fireballs: Fireball[], vessels: Vessel[], config: Config, events: WorldEvent[]): Fireball[] {
+function flyFireballs(fireballs: Fireball[], vessels: Vessel[], rule: TargetingRule, config: Config, events: WorldEvent[]): Fireball[] {
   const flying: Fireball[] = [];
   const maxTurn = config.fireballTurnRate * TICK_SECONDS;
+  const enemies = vessels.filter((vessel) => sideOf(vessel) === 'enemy');
   for (const fireball of fireballs) {
-    const target = vessels.find((vessel) => vessel.id === fireball.targetId && vessel.health > 0);
+    const target =
+      vessels.find((vessel) => vessel.id === fireball.targetId && vessel.health > 0) ??
+      (fireball.side === 'player' ? pickTarget(fireball, enemies, config.fireballRange, rule) : undefined);
     const turn = target ? angleBetween(fireball.heading, bearing(fireball.x, fireball.y, target.x, target.y)) : 0;
     const heading = fireball.heading + clamp(turn, -maxTurn, maxTurn);
     const distance = config.fireballSpeed * TICK_SECONDS;
@@ -593,7 +636,7 @@ function flyFireballs(fireballs: Fireball[], vessels: Vessel[], config: Config, 
       events.push({ type: 'fireballBurnedOut', x, y });
       continue;
     }
-    flying.push({ ...fireball, x, y, heading, burnTicks: fireball.burnTicks - 1 });
+    flying.push({ ...fireball, x, y, heading, targetId: target?.id ?? fireball.targetId, burnTicks: fireball.burnTicks - 1 });
   }
   return flying;
 }
@@ -635,7 +678,7 @@ function throwWizardFireballs(enemies: Vessel[], player: Vessel, config: Config)
   for (const enemy of enemies) {
     if (!enemy.wizardVessel || enemy.health === 0) continue;
     if (enemy.fireballTicks > 0) enemy.fireballTicks--;
-    if (enemy.fireballTicks > 0 || !closestInRange(enemy, [player], config.fireballRange)) continue;
+    if (enemy.fireballTicks > 0 || !pickTarget(enemy, [player], config.fireballRange)) continue;
     enemy.fireballTicks = ticksFor(config.wizardFireballCooldownSeconds);
     thrown.push({
       side: 'enemy',
@@ -650,13 +693,22 @@ function throwWizardFireballs(enemies: Vessel[], player: Vessel, config: Config)
   return thrown;
 }
 
-/** The closest vessel afloat among the others that is within range of the vessel. */
-function closestInRange(vessel: Vessel, others: Vessel[], range: number): Vessel | undefined {
+/** How each Targeting rule ranks a vessel, lowest first, before ties go to the closest. */
+const targetingOrder: Record<TargetingRule, (vessel: Vessel, distance: number) => number> = {
+  closest: () => 0,
+  farthest: (_, distance) => -distance,
+  lowestHealth: (vessel) => vessel.health,
+  highestHealth: (vessel) => -vessel.health,
+};
+
+/** The vessel afloat among the others, within range of the point, that the Targeting rule picks. Ties go to the closest. */
+function pickTarget(from: Vector, others: Vessel[], range: number, rule: TargetingRule = 'closest'): Vessel | undefined {
+  const order = targetingOrder[rule];
   return others
     .filter((other) => other.health > 0)
-    .map((other) => ({ other, distance: Math.hypot(other.x - vessel.x, other.y - vessel.y) }))
+    .map((other) => ({ other, distance: Math.hypot(other.x - from.x, other.y - from.y) }))
     .filter(({ distance }) => distance <= range)
-    .sort((a, b) => a.distance - b.distance)[0]?.other;
+    .sort((a, b) => order(a.other, a.distance) - order(b.other, b.distance) || a.distance - b.distance)[0]?.other;
 }
 
 /** Restarts the regen delay. At zero health the vessel starts sinking. */
@@ -683,7 +735,7 @@ function fireVolleys(vessels: Vessel[], levels: CabinLevels, config: Config): Ar
     if (vessel.health === 0) continue;
     if (vessel.volleyTicks > 0) vessel.volleyTicks--;
     if (vessel.volleyTicks > 0) continue;
-    const target = closestInRange(
+    const target = pickTarget(
       vessel,
       vessels.filter((other) => sideOf(other) !== sideOf(vessel)),
       config.arrowRange,

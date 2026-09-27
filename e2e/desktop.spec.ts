@@ -232,3 +232,18 @@ test('at the start of a Run the Cabin shows Gold, health and the dinghy, and Rep
   await page.getByTestId('cabin-close').click();
   await expect(page.getByTestId('cabin')).toBeHidden();
 });
+
+test('the Cabin picker lists only the "closest" Targeting rule at the start of a Run, marked active', async ({ page }) => {
+  await startRun(page);
+
+  await page.keyboard.press('KeyE');
+
+  const rules = page.getByTestId('cabin-rules').getByRole('button');
+  await expect(rules).toHaveCount(1);
+  await expect(page.getByTestId('rule-closest')).toHaveText('closest');
+  await expect(page.getByTestId('rule-closest')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('cabin-item-farthest')).toContainText('25 Gold');
+  // Setting the rule that is already active changes nothing.
+  await page.getByTestId('rule-closest').click();
+  expect(await page.evaluate(() => window.navalSkirmishTest!.state.targetingRule)).toBe('closest');
+});

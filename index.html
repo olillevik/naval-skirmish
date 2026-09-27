@@ -172,6 +172,10 @@
       /* Big enough to tap on a phone. */
       #cabin button { min-height: 2.75rem; padding: 0.5rem 1.25rem; }
       #cabin button:disabled { opacity: 0.4; cursor: default; }
+      #cabin-picker { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.5rem 1rem; }
+      #cabin-rules { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+      /* The active Targeting rule. */
+      #cabin-rules button[aria-pressed='true'] { color: #0b0e1f; background: #ff9a2e; }
       /* The game is landscape only. A coarse pointer means a phone or tablet, not a narrow desktop window. */
       #rotate-message { display: none; z-index: 1; background: #0b0e1f; }
       @media (orientation: portrait) and (pointer: coarse) {
@@ -202,6 +206,10 @@
         <span id="cabin-gold" data-testid="cabin-gold"></span>
         <span id="cabin-health" data-testid="cabin-health"></span>
         <span id="cabin-vessel" data-testid="cabin-vessel"></span>
+      </p>
+      <p id="cabin-picker">
+        <span id="cabin-rules-label"></span>
+        <span id="cabin-rules" data-testid="cabin-rules"></span>
       </p>
       <ul id="cabin-items" data-testid="cabin-items"></ul>
       <button id="cabin-close" type="button" data-testid="cabin-close"></button>

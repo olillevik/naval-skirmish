@@ -54,5 +54,8 @@ export const defaultConfig: Config = {
     volleySize: { prices: [30, 60, 120, 240], arrows: 1 },
     fireballDamage: { prices: [30, 60, 120], damage: [55, 70, 90] },
     fireballCooldown: { prices: [30, 60, 120], cooldownSeconds: [5, 4, 3] },
+    farthest: { prices: [25] },
+    lowestHealth: { prices: [25] },
+    highestHealth: { prices: [25] },
   },
 };

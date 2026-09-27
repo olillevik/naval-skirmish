@@ -1,4 +1,4 @@
-import type { CabinItem, CabinItemName, Config, WorldState } from '../core/world';
+import type { CabinItem, CabinItemName, Config, TargetingRule, WorldState } from '../core/world';
 import { text } from './text';
 
 /** The row of one Cabin item, built once and filled from the state each time the Cabin shows. */
@@ -11,7 +11,8 @@ interface Row {
 }
 
 /**
- * The Cabin overlay: Gold, health and the vessel at the top, then a row per Cabin item. It is a page
+ * The Cabin overlay: Gold, health and the vessel at the top, then the Targeting rule picker with a button per
+ * owned rule, the active one pressed, then a row per Cabin item. It is a page
  * element over the paused game, so it works with the mouse and with taps. Its rows come from the
  * world state's item list, so a new item only needs its text.
  */
@@ -21,14 +22,21 @@ export class Cabin {
   private health = document.getElementById('cabin-health')!;
   private vessel = document.getElementById('cabin-vessel')!;
   private items = document.getElementById('cabin-items')!;
+  private rules = document.getElementById('cabin-rules')!;
   private rows = new Map<CabinItemName, Row>();
 
   constructor(
     private config: Config,
     onBuy: (item: CabinItemName) => void,
+    onSetRule: (rule: TargetingRule) => void,
     onClose: () => void,
   ) {
     document.getElementById('cabin-title')!.textContent = text.cabinTitle;
+    document.getElementById('cabin-rules-label')!.textContent = text.targetingRule;
+    this.rules.addEventListener('click', (event) => {
+      const button = (event.target as HTMLElement).closest('button');
+      if (button?.dataset.rule) onSetRule(button.dataset.rule as TargetingRule);
+    });
     const close = document.getElementById('cabin-close')!;
     close.textContent = text.cabinClose;
     close.addEventListener('click', onClose);
@@ -43,10 +51,19 @@ export class Cabin {
   }
 
   show(state: WorldState): void {
-    const { gold, player, cabin } = state;
+    const { gold, player, cabin, targetingRules, targetingRule } = state;
     this.gold.textContent = text.gold(gold);
     this.health.textContent = text.health(player.health, player.maxHealth);
     this.vessel.textContent = text.vesselClasses[player.vesselClass];
+    this.rules.replaceChildren(
+      ...targetingRules.map((rule) => {
+        const button = Object.assign(document.createElement('button'), { type: 'button', textContent: text.targetingRules[rule] });
+        button.dataset.rule = rule;
+        button.dataset.testid = `rule-${rule}`;
+        button.setAttribute('aria-pressed', String(rule === targetingRule));
+        return button;
+      }),
+    );
     for (const item of cabin) this.fillRow(this.rows.get(item.item) ?? this.addRow(item.item), item);
     this.element.hidden = false;
   }
@@ -71,7 +88,7 @@ export class Cabin {
   }
 
   private fillRow(row: Row, { level, highestLevel, nextPrice, canBuy }: CabinItem): void {
-    row.level.textContent = nextPrice === null ? text.maxed : highestLevel === null ? text.repeatable : text.level(level, highestLevel);
+    row.level.textContent = nextPrice === null ? (text.cabinItems[row.item].maxed ?? text.maxed) : highestLevel === null ? text.repeatable : text.level(level, highestLevel);
     row.next.textContent = nextPrice === null ? '' : text.cabinItems[row.item].next(this.config, level);
     row.price.textContent = nextPrice === null ? '' : text.price(nextPrice);
     row.buy.disabled = !canBuy;

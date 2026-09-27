@@ -7,7 +7,7 @@ import {
   step,
   TICK_SECONDS,
   type Arrow,
-  type CabinItemName,
+  type CabinAction,
   type Commands,
   type Config,
   type Fireball,
@@ -116,7 +116,8 @@ export class GameScene extends Scene {
   private cabinButton = document.getElementById('cabin-button')!;
   private cabin = new Cabin(
     defaultConfig,
-    (item) => this.buy(item),
+    (item) => this.act({ type: 'buy', item }),
+    (rule) => this.act({ type: 'setTargetingRule', rule }),
     () => this.closeCabin(),
   );
   /** False while a screen such as the start screen is showing, so the world doesn't tick. */
@@ -238,8 +239,8 @@ export class GameScene extends Scene {
     this.draw([]);
   }
 
-  private buy(item: CabinItemName): void {
-    this.world = applyCabinAction(this.world, { type: 'buy', item });
+  private act(action: CabinAction): void {
+    this.world = applyCabinAction(this.world, action);
     this.cabin.show(readState(this.world));
   }
 
