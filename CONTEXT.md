@@ -17,7 +17,7 @@ The rowboat the player starts in.
 _Avoid_: Robot, rowboat, canoe
 
 **Ship**:
-A vessel with a hull and sails, bigger than a dinghy. The player can buy the small ship, with white sails, in the Cabin.
+A vessel with a hull and sails, bigger than a dinghy. The player can buy the small ship in the Cabin, and after it the medium ship with two masts. Both have white sails. A bigger ship has more health and speed and can carry more cannons.
 _Avoid_: Using "ship" for a dinghy
 
 **Wizard**:
@@ -29,13 +29,13 @@ The player's own Wizard. The Captain goes with the player from vessel to vessel.
 _Avoid_: Player character, hero
 
 **Crew**:
-The ordinary sailors aboard a vessel. They shoot Arrows.
+The ordinary sailors aboard a vessel. They shoot Arrows, and on a ship they fire the cannons too.
 _Avoid_: Sailors, pirates
 
 ### Combat
 
 **Fireball**:
-A Wizard's spell, with a slow cooldown. The player decides when the Captain throws one.
+A Wizard's spell, with a slow cooldown. The player decides when the Captain throws one. It hurts every enemy near the point where it hits and sets them Burning. A fleeing vessel can outrun one, but only just.
 _Avoid_: Magic missile, shot
 
 **Arrow**:
@@ -55,12 +55,20 @@ An enemy vessel with a Wizard aboard, marked by a glow and a flag of its own.
 _Avoid_: Boss, elite
 
 **Targeting rule**:
-The Captain's choice of which enemy the Captain's Fireballs go for, such as closest, farthest, highest health or lowest health.
+The Captain's choice of which enemy the Captain's Fireballs go for: closest, farthest, highest health or lowest health. All four are free, and the player picks one in the Cabin.
 _Avoid_: Aim mode, priority
 
-**Broadside**:
-Cannon fire to the left or right side of a ship.
-_Avoid_: Side shot
+**Burning**:
+Fire damage over a few seconds, set by a Fireball or a Flaming arrow. A new burn restarts the current one instead of stacking.
+_Avoid_: DOT, damage over time
+
+**Cannon**:
+A gun on a ship. Dinghies have none. A ship's cannons fire together at the closest enemy in range, and reach farther than Arrows. A bought ship has 1 cannon, and the player buys more up to the most that ship can carry: 2 on the small ship and 4 on the medium ship.
+_Avoid_: Gun, Broadside
+
+**Cannonball**:
+What a cannon fires.
+_Avoid_: Shot, shell
 
 ### The world
 
