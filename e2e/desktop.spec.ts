@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { openGame, startRun } from './helpers';
 
-test('the Dinghy starts in the centre of the Arena', async ({ page }) => {
+test('the dinghy starts in the centre of the Arena', async ({ page }) => {
   await startRun(page);
 
   const dinghy = await page.evaluate(() => window.navalSkirmishTest!.state.dinghy);
@@ -32,7 +32,7 @@ for (const [name, throttleKey, rightKey] of [
   ['WASD', 'KeyW', 'KeyD'],
   ['arrow keys', 'ArrowUp', 'ArrowRight'],
 ] as const) {
-  test(`holding throttle then right with the ${name} moves and turns the Dinghy`, async ({ page }) => {
+  test(`holding throttle then right with the ${name} moves and turns the dinghy`, async ({ page }) => {
     await startRun(page);
 
     await page.keyboard.down(throttleKey);
@@ -51,7 +51,7 @@ for (const [name, throttleKey, rightKey] of [
   });
 }
 
-test('the Dinghy ignores the keyboard until the start screen is clicked', async ({ page }) => {
+test('the dinghy ignores the keyboard until the start screen is clicked', async ({ page }) => {
   await openGame(page);
   await expect(page.getByTestId('start-screen')).toBeVisible();
 
@@ -92,7 +92,7 @@ test('there are no touch controls on desktop', async ({ page }) => {
   await expect(page.getByTestId('steering-area')).toBeHidden();
 });
 
-test('sailing over the Edge ends the Run, and a new Run resets the Dinghy', async ({ page }) => {
+test('sailing over the Edge ends the Run, and a new Run resets the dinghy', async ({ page }) => {
   // Full throttle reaches the Edge in about 11 s, then the fall takes 1 s.
   test.setTimeout(60_000);
   await startRun(page);
@@ -105,7 +105,7 @@ test('sailing over the Edge ends the Run, and a new Run resets the Dinghy', asyn
   await expect(warning).toBeVisible();
   await expect(gameOver).toBeVisible({ timeout: 10_000 });
   await page.keyboard.up('KeyW');
-  await expect(gameOver).toContainText('The Dinghy fell off the Edge');
+  await expect(gameOver).toContainText('The dinghy fell off the Edge');
   expect((await page.evaluate(() => window.navalSkirmishTest!.state)).run).toBe('ended');
 
   await page.getByTestId('new-run').click();

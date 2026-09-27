@@ -6,6 +6,8 @@ A top-down browser game. The player steers a vessel on a magical sea that ends i
 
 ### Vessels and crew
 
+Vessel types are ordinary nouns: write dinghy and ship in lowercase except at the start of a sentence.
+
 **Vessel**:
 Anything the player or an enemy sails, from the smallest rowboat to the largest ship.
 _Avoid_: Boat (when meaning any vessel), unit

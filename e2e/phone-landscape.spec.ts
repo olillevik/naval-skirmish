@@ -103,7 +103,7 @@ test('a long sideways drag turns faster than a short one, and lifting stops the 
   const touch = await touchscreen(page);
   const start = { x: steering.x + steering.width / 2, y: steering.y + steering.height / 2 };
 
-  /** Holds a drag of this many px to the right for half a second, and returns how far the Dinghy turned. */
+  /** Holds a drag of this many px to the right for half a second, and returns how far the dinghy turned. */
   async function turnWithDrag(distance: number): Promise<number> {
     await touch.down(1, start);
     await touch.move(1, { x: start.x + distance, y: start.y });

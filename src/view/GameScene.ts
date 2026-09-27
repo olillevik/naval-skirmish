@@ -74,7 +74,7 @@ export class GameScene extends Scene {
     const { run, pastPointOfNoReturn, dinghy } = readState(this.world);
     this.edgeWarning.hidden = !pastPointOfNoReturn || run === 'ended';
     this.touch.showThrottle(dinghy.throttle);
-    // Once the Dinghy has crossed the Edge, the fall animation owns its scale, alpha and rotation.
+    // Once the dinghy has crossed the Edge, the fall animation owns its scale, alpha and rotation.
     if (!this.fall) this.draw();
     if (run !== 'sailing' && !this.fall) {
       this.fall = this.tweens.add({

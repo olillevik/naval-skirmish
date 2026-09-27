@@ -18,7 +18,7 @@ export interface Config {
   rimCurrentStart: number;
   /** Where the Rim current's pull equals top speed, as a fraction of the Arena radius. Past it no rowing escapes. */
   pointOfNoReturn: number;
-  /** How long the Run stays falling after the Dinghy crosses the Edge, in seconds. */
+  /** How long the Run stays falling after the dinghy crosses the Edge, in seconds. */
   fallSeconds: number;
 }
 
@@ -41,7 +41,7 @@ export interface Vector {
 
 export interface WorldState {
   dinghy: Dinghy;
-  /** The Rim current's pull at the Dinghy, px/s. */
+  /** The Rim current's pull at the dinghy, px/s. */
   rimCurrent: Vector;
   /** True once the Rim current is stronger than top speed, so no rowing can escape it. */
   pastPointOfNoReturn: boolean;
@@ -87,7 +87,7 @@ export function readState(world: World): WorldState {
 /** Advances the world by one fixed tick of TICK_SECONDS. */
 export function step(world: World, commands: Commands): World {
   const { config } = world;
-  // The Dinghy stays where it crossed the Edge while it falls. The view draws the fall.
+  // The dinghy stays where it crossed the Edge while it falls. The view draws the fall.
   if (world.state.run === 'ended') return world;
   if (world.state.run === 'falling') {
     const fallTicks = world.fallTicks + 1;
