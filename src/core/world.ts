@@ -54,6 +54,8 @@ export interface Commands {
   throttleDown: boolean;
   /** -1 (full left) to 1 (full right). */
   rudder: number;
+  /** Sets the throttle straight to this value, 0 (stopped) to 1 (full), in place of up and down. */
+  setThrottle?: number;
 }
 
 export interface World {
@@ -95,7 +97,11 @@ export function step(world: World, commands: Commands): World {
 
   const dinghy = world.state.dinghy;
   const throttleDirection = Number(commands.throttleUp) - Number(commands.throttleDown);
-  const throttle = clamp(dinghy.throttle + throttleDirection * config.throttleRate * TICK_SECONDS, 0, 1);
+  const throttle = clamp(
+    commands.setThrottle ?? dinghy.throttle + throttleDirection * config.throttleRate * TICK_SECONDS,
+    0,
+    1,
+  );
   const maxSpeedChange = config.acceleration * TICK_SECONDS;
   const speed = clamp(throttle * config.topSpeed, dinghy.speed - maxSpeedChange, dinghy.speed + maxSpeedChange);
   const heading = dinghy.heading + clamp(commands.rudder, -1, 1) * config.turnRate * TICK_SECONDS;

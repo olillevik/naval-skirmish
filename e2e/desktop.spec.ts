@@ -85,6 +85,13 @@ test('there is no rotate message on desktop', async ({ page }) => {
   await expect(page.getByTestId('rotate-message')).toBeHidden();
 });
 
+test('there are no touch controls on desktop', async ({ page }) => {
+  await startRun(page);
+
+  await expect(page.getByTestId('throttle-lever')).toBeHidden();
+  await expect(page.getByTestId('steering-area')).toBeHidden();
+});
+
 test('sailing over the Edge ends the Run, and a new Run resets the Dinghy', async ({ page }) => {
   // Full throttle reaches the Edge in about 11 s, then the fall takes 1 s.
   test.setTimeout(60_000);

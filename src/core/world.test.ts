@@ -69,6 +69,19 @@ describe('throttle', () => {
     expect(readState(world).dinghy.throttle).toBe(0);
   });
 
+  it('jumps to the value a set-throttle command asks for, and stays there', () => {
+    const set = run(createWorld(1, config), { ...noCommands, setThrottle: 0.8 }, 1);
+    const left = run(set, noCommands, 60);
+
+    expect(readState(set).dinghy.throttle).toBe(0.8);
+    expect(readState(left).dinghy.throttle).toBe(0.8);
+  });
+
+  it('keeps a set-throttle command between 0 and full', () => {
+    expect(readState(step(createWorld(1, config), { ...noCommands, setThrottle: 3 })).dinghy.throttle).toBe(1);
+    expect(readState(step(createWorld(1, config), { ...up, setThrottle: -1 })).dinghy.throttle).toBe(0);
+  });
+
   it('does not change when up and down are held together', () => {
     const both = { ...noCommands, throttleUp: true, throttleDown: true };
     const world = run(run(createWorld(1, config), up, 60), both, 60);

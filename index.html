@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
     <title>Naval Skirmish</title>
     <style>
-      html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0e1f; }
+      /* The page never scrolls or zooms, so every touch goes to the game. */
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0e1f; touch-action: none; }
       /* Screens and the rotate message are page elements laid over the game's canvas. */
       .overlay {
         position: fixed;
@@ -49,6 +50,44 @@
         pointer-events: none;
         user-select: none;
       }
+      /* Phone controls. A coarse pointer means a touch screen, as for the rotate message. */
+      .touch-control {
+        display: none;
+        position: fixed;
+        top: 0;
+        bottom: 0;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+      }
+      @media (pointer: coarse) {
+        .touch-control { display: block; }
+      }
+      #steering-area { left: 0; width: 50%; }
+      /* The whole right strip catches the thumb. The track inside it shows the throttle. */
+      #throttle-lever { right: 0; width: 6rem; }
+      #lever-track {
+        position: absolute;
+        top: 3rem;
+        bottom: 1.5rem;
+        right: 1.5rem;
+        width: 2.5rem;
+        overflow: hidden;
+        border: 2px solid #eaf6ff;
+        border-radius: 0.5rem;
+        background: rgb(11 14 31 / 0.65);
+      }
+      #lever-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: #eaf6ff; }
+      #lever-value {
+        position: absolute;
+        top: 0.75rem;
+        right: 1rem;
+        width: 3.5rem;
+        text-align: center;
+        font: bold 1rem system-ui, sans-serif;
+        color: #eaf6ff;
+        text-shadow: 0 0 3px #0b0e1f, 0 0 3px #0b0e1f;
+      }
       /* The game is landscape only. A coarse pointer means a phone or tablet, not a narrow desktop window. */
       #rotate-message { display: none; z-index: 1; background: #0b0e1f; }
       @media (orientation: portrait) and (pointer: coarse) {
@@ -57,6 +96,12 @@
     </style>
   </head>
   <body>
+    <!-- Before the overlays, so the start, game-over and rotate screens cover the controls. -->
+    <div id="steering-area" class="touch-control" data-testid="steering-area"></div>
+    <div id="throttle-lever" class="touch-control" data-testid="throttle-lever">
+      <div id="lever-track"><div id="lever-fill"></div></div>
+      <span id="lever-value" data-testid="throttle-value">0%</span>
+    </div>
     <div id="start-screen" class="overlay" data-testid="start-screen">
       <h1>Naval Skirmish</h1>
       <p>Tap or click to start</p>

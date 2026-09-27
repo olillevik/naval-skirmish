@@ -2,6 +2,7 @@ import { Scene, type GameObjects, type Input, type Tweens } from 'phaser';
 import { defaultConfig } from '../core/config';
 import { createWorld, readState, step, TICK_SECONDS, type Commands, type Config, type World } from '../core/world';
 import { installTestHook } from './testHook';
+import { TouchControls } from './touchControls';
 
 const DINGHY_SCALE = 2;
 /** The pack's sprites point their bow down the screen; heading 0 points up. */
@@ -25,6 +26,7 @@ export class GameScene extends Scene {
   private world!: World;
   private dinghy!: GameObjects.Image;
   private keys!: Keys;
+  private touch = new TouchControls();
   private accumulator = 0;
   private fall?: Tweens.Tween;
   private edgeWarning = document.getElementById('edge-warning')!;
@@ -59,15 +61,19 @@ export class GameScene extends Scene {
 
   update(_time: number, deltaMs: number): void {
     if (!this.running) return;
-    const commands = this.readKeyboard();
     this.accumulator += Math.min(deltaMs / 1000, MAX_FRAME_SECONDS);
-    while (this.accumulator >= TICK_SECONDS) {
-      this.world = step(this.world, commands);
-      this.accumulator -= TICK_SECONDS;
+    // Read only when a tick runs, so a lever move in a frame without a tick isn't lost.
+    if (this.accumulator >= TICK_SECONDS) {
+      const commands = this.readCommands();
+      while (this.accumulator >= TICK_SECONDS) {
+        this.world = step(this.world, commands);
+        this.accumulator -= TICK_SECONDS;
+      }
     }
 
-    const { run, pastPointOfNoReturn } = readState(this.world);
+    const { run, pastPointOfNoReturn, dinghy } = readState(this.world);
     this.edgeWarning.hidden = !pastPointOfNoReturn || run === 'ended';
+    this.touch.showThrottle(dinghy.throttle);
     // Once the Dinghy has crossed the Edge, the fall animation owns its scale, alpha and rotation.
     if (!this.fall) this.draw();
     if (run !== 'sailing' && !this.fall) {
@@ -90,6 +96,8 @@ export class GameScene extends Scene {
   private startRun(): void {
     this.world = createWorld(Date.now(), defaultConfig);
     this.accumulator = 0;
+    this.touch.takeThrottle();
+    this.touch.showThrottle(0);
     this.fall?.remove();
     this.fall = undefined;
     this.dinghy.setScale(DINGHY_SCALE).setAlpha(1);
@@ -111,14 +119,16 @@ export class GameScene extends Scene {
     );
   }
 
-  private readKeyboard(): Commands {
+  /** Merges the keyboard and the touch controls. The core clamps the summed rudder to full. */
+  private readCommands(): Commands {
     const k = this.keys;
     const left = k.A.isDown || k.LEFT.isDown;
     const right = k.D.isDown || k.RIGHT.isDown;
     return {
       throttleUp: k.W.isDown || k.UP.isDown,
       throttleDown: k.S.isDown || k.DOWN.isDown,
-      rudder: Number(right) - Number(left),
+      rudder: Number(right) - Number(left) + this.touch.rudder,
+      setThrottle: this.touch.takeThrottle(),
     };
   }
 
