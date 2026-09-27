@@ -1,0 +1,25 @@
+# Naval Skirmish
+
+A top-down browser game about steering a small Dinghy across a round magical sea that ends in open space. The latest build of `main` is live at <https://olillevik.github.io/naval-skirmish/>.
+
+Right now the game is a walking skeleton. The Dinghy sits still in the middle of the Arena and there is nothing to do yet. Keyboard and phone controls are coming in the next milestones.
+
+## Run it
+
+You need Node.js 22.12 or newer (CI uses Node.js 24). Install the dependencies once with `npm install`, then run `npm run dev` and open the URL Vite prints (it ends in `/naval-skirmish/`).
+
+## Test it
+
+`npm test` runs the Vitest unit tests against the game core, with no browser. `npm run test:e2e` builds the game and runs the Playwright smoke tests against that build. Before the first browser run, install Chromium with `npx playwright install chromium`. `npm run typecheck` runs the TypeScript compiler.
+
+The browser tests read the game state through a read-only test hook, `window.navalSkirmishTest.state`. The hook exists only when the page URL has the `?test` flag.
+
+## How the code is laid out
+
+All game rules live in `src/core`, which is plain TypeScript that never imports Phaser (see [ADR 0001](docs/adr/0001-pure-game-core-with-phaser-view.md)). The core has three operations: `createWorld(seed, config)`, `step(world, commands)` and `readState(world)`. The Phaser view in `src/view` draws the core's state and calls `step` once per fixed tick of 1/60 s. Domain words such as Dinghy, Arena and Edge are defined in [CONTEXT.md](CONTEXT.md).
+
+GitHub Actions runs the type check and both test suites on every push and pull request. When they pass on `main`, it deploys the build to GitHub Pages.
+
+## Credits
+
+The art is from the [Pirate Pack](https://kenney.nl/assets/pirate-pack) by Kenney (www.kenney.nl), released under CC0.
