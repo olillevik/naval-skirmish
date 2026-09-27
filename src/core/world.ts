@@ -43,6 +43,16 @@ export interface Config {
   volleySeconds: number;
   /** The angle between neighbouring Arrows in one Volley, radians. */
   volleySpread: number;
+  /** How far a cannonball flies, px. A vessel's cannons only fire at a vessel this close. */
+  cannonRange: number;
+  /** px/s. */
+  cannonSpeed: number;
+  /** Health each cannonball takes off the vessel it hits. */
+  cannonDamage: number;
+  /** The time between one firing of a vessel's cannons and the next, in seconds. */
+  cannonReloadSeconds: number;
+  /** The angle between neighbouring cannonballs fired at the same moment, radians. */
+  cannonSpread: number;
   /** Health one of the Captain's Fireballs takes off each vessel it hurts. */
   fireballDamage: number;
   /** A Fireball hurts every vessel on the other side whose centre is this close to the centre of the vessel it hits, px. */
@@ -175,6 +185,10 @@ export interface VesselClass {
   volleySize: number;
   /** Health each of this vessel's Arrows takes off the vessel it hits. */
   arrowDamage: number;
+  /** Cannons a vessel of this class has when it spawns or is bought. 0 for a class without cannons. */
+  cannons: number;
+  /** The most cannons a vessel of this class can carry. */
+  highestCannons: number;
   /** Gold credited to the player when an enemy of this class is lost. Nobody earns Gold for the player vessel. */
   gold: number;
 }
@@ -202,6 +216,10 @@ export interface Vessel {
   maxHealth: number;
   /** Ticks left before the Crew can fire the next Volley. A ready Crew fires as soon as an enemy is in range. */
   volleyTicks: number;
+  /** The cannons the vessel carries. They all fire at the same moment. */
+  cannons: number;
+  /** Ticks left before the cannons can fire again. Ready cannons fire as soon as an enemy is in cannon range. */
+  cannonTicks: number;
   /** An enemy vessel with a Wizard aboard, who throws Fireballs at the player vessel. Always false for the player vessel. */
   wizardVessel: boolean;
   /** Ticks left before the vessel's Wizard, the Captain on the player vessel, can throw the next Fireball. */
@@ -226,6 +244,18 @@ export interface Arrow {
   damage: number;
   /** Fired by the player Crew once Flaming arrows are bought. A hit sets the target burning. */
   flaming: boolean;
+  /** px flown so far. */
+  flown: number;
+}
+
+/** Flies straight until it hits a vessel on the other side or has flown the cannon range. It never burns. */
+export interface Cannonball {
+  /** The side of the vessel that fired it. It never hurts that side. */
+  side: Side;
+  x: number;
+  y: number;
+  heading: number;
+  damage: number;
   /** px flown so far. */
   flown: number;
 }
@@ -258,6 +288,10 @@ const targetingRules: TargetingRule[] = ['closest', 'farthest', 'lowestHealth', 
 /** Something that happened during the last tick, for the view's effects. */
 export type WorldEvent =
   | { type: 'arrowHit'; vesselId: number }
+  /** A cannonball hit the vessel, whose centre is at this point. */
+  | { type: 'cannonballHit'; vesselId: number; x: number; y: number }
+  /** A cannonball flew the cannon range without a hit, and dropped into the sea at this point. */
+  | { type: 'cannonballSplash'; x: number; y: number }
   /** The vessel took ramming damage. */
   | { type: 'rammed'; vesselId: number }
   /** A Fireball exploded at this point, the centre of the vessel it hit, and hurt these vessels. */
@@ -286,6 +320,7 @@ export interface WorldState {
   /** An enemy that crosses the Edge, or has finished sinking, is lost and leaves this list. */
   enemies: Vessel[];
   arrows: Arrow[];
+  cannonballs: Cannonball[];
   fireballs: Fireball[];
   /** The active Targeting rule. It stays until the player sets another in the Cabin. */
   targetingRule: TargetingRule;
@@ -361,6 +396,7 @@ export function createWorld(seed: number, config: Config): World {
       player: newVessel(0, 'smallDinghy', 0, 0, 0, config),
       enemies: [],
       arrows: [],
+      cannonballs: [],
       fireballs: [],
       targetingRule: 'closest',
       fireballTargetId: null,
@@ -398,6 +434,8 @@ function newVessel(
     health,
     maxHealth: health,
     volleyTicks: 0,
+    cannons: config.vesselClasses[vesselClass].cannons,
+    cannonTicks: 0,
     wizardVessel: false,
     fireballTicks: 0,
     regenDelayTicks: 0,
@@ -465,8 +503,8 @@ const cabinRules: Record<CabinItemName, CabinRule> = {
     shown: (player) => player.vesselClass !== 'smallShip',
     // Position, heading, speed and throttle stay. Health is the new full max, so the swap can rescue a sinking dinghy.
     apply: (player, config, levels) => {
-      const { maxHealth } = playerStats('smallShip', levels, config);
-      return { ...player, vesselClass: 'smallShip', maxHealth, health: maxHealth };
+      const { maxHealth, cannons } = playerStats('smallShip', levels, config);
+      return { ...player, vesselClass: 'smallShip', maxHealth, health: maxHealth, cannons };
     },
   },
 };
@@ -483,6 +521,7 @@ function playerStats(vesselClass: VesselClassName, levels: CabinLevels, config: 
     regenRate: config.regenRate + levels.regen * cabin.regen.regenRate,
     volleySeconds: levels.arrowRate === 0 ? config.volleySeconds : cabin.arrowRate.volleySeconds[levels.arrowRate - 1],
     volleySize: stats.volleySize + levels.volleySize * cabin.volleySize.arrows,
+    cannons: stats.cannons,
     fireballDamage: levels.fireballDamage === 0 ? config.fireballDamage : cabin.fireballDamage.damage[levels.fireballDamage - 1],
     fireballCooldownSeconds:
       levels.fireballCooldown === 0 ? config.fireballCooldownSeconds : cabin.fireballCooldown.cooldownSeconds[levels.fireballCooldown - 1],
@@ -552,6 +591,7 @@ export function step(world: World, commands: Commands): World {
   const afloat = pushApart(moved, config).map((vessel) => feelRimCurrent(vessel, config));
   burn(afloat, config, events);
   const arrows = [...flyArrows(state.arrows, afloat, config, events), ...fireVolleys(afloat, world.cabinLevels, config)];
+  const cannonballs = [...flyCannonballs(state.cannonballs, afloat, config, events), ...fireCannons(afloat, config)];
   const flying = flyFireballs(state.fireballs, afloat, state.targetingRule, config, events);
 
   const [player, ...enemies] = afloat;
@@ -583,6 +623,7 @@ export function step(world: World, commands: Commands): World {
       player,
       enemies: [...enemies.filter((enemy) => enemy.health === 0 || !overEdge(enemy)), ...wrecks],
       arrows,
+      cannonballs,
       fireballs,
       fireballTargetId: target?.id ?? null,
       run: endCause === 'sank' ? 'sinking' : endCause ? 'falling' : 'sailing',
@@ -608,21 +649,61 @@ function regenerate(player: Vessel, regenRate: number): void {
  * first one it reaches and is removed. One that has flown the Arrow range is removed too.
  */
 function flyArrows(arrows: Arrow[], vessels: Vessel[], config: Config, events: WorldEvent[]): Arrow[] {
-  const flying: Arrow[] = [];
-  for (const arrow of arrows) {
-    const distance = Math.min(config.arrowSpeed * TICK_SECONDS, config.arrowRange - arrow.flown);
-    const dx = Math.sin(arrow.heading) * distance;
-    const dy = -Math.cos(arrow.heading) * distance;
-    const hit = firstHit(arrow, dx, dy, vessels, config);
-    if (hit) {
-      damage(hit, arrow.damage, config);
-      if (arrow.flaming) setBurning(hit, config.cabin.flamingArrows);
-      events.push({ type: 'arrowHit', vesselId: hit.id });
+  return flyStraight(arrows, config.arrowSpeed, config.arrowRange, vessels, config, (arrow, hit) => {
+    damage(hit, arrow.damage, config);
+    if (arrow.flaming) setBurning(hit, config.cabin.flamingArrows);
+    events.push({ type: 'arrowHit', vesselId: hit.id });
+    if (hit.health === 0) events.push({ type: 'vesselSunk', vesselId: hit.id });
+  });
+}
+
+/**
+ * Moves each cannonball one tick along its heading. A cannonball that touches a vessel on the other side hurts
+ * the first one it reaches and is removed. One that has flown the cannon range drops into the sea.
+ */
+function flyCannonballs(cannonballs: Cannonball[], vessels: Vessel[], config: Config, events: WorldEvent[]): Cannonball[] {
+  return flyStraight(
+    cannonballs,
+    config.cannonSpeed,
+    config.cannonRange,
+    vessels,
+    config,
+    (cannonball, hit) => {
+      damage(hit, cannonball.damage, config);
+      events.push({ type: 'cannonballHit', vesselId: hit.id, x: hit.x, y: hit.y });
       if (hit.health === 0) events.push({ type: 'vesselSunk', vesselId: hit.id });
+    },
+    (x, y) => events.push({ type: 'cannonballSplash', x, y }),
+  );
+}
+
+/**
+ * Moves each shot one tick along its heading at the speed, and returns the shots still flying. A shot that
+ * touches a vessel on the other side goes to the hit, with the first vessel it reaches. One that has flown
+ * the range goes to the drop, with the point where it stopped.
+ */
+function flyStraight<T extends Arrow | Cannonball>(
+  shots: T[],
+  speed: number,
+  range: number,
+  vessels: Vessel[],
+  config: Config,
+  hit: (shot: T, vessel: Vessel) => void,
+  drop: (x: number, y: number) => void = () => {},
+): T[] {
+  const flying: T[] = [];
+  for (const shot of shots) {
+    const distance = Math.min(speed * TICK_SECONDS, range - shot.flown);
+    const dx = Math.sin(shot.heading) * distance;
+    const dy = -Math.cos(shot.heading) * distance;
+    const vessel = firstHit(shot, dx, dy, vessels, config);
+    if (vessel) {
+      hit(shot, vessel);
       continue;
     }
-    const flown = arrow.flown + distance;
-    if (flown < config.arrowRange) flying.push({ ...arrow, x: arrow.x + dx, y: arrow.y + dy, flown });
+    const [x, y, flown] = [shot.x + dx, shot.y + dy, shot.flown + distance];
+    if (flown < range) flying.push({ ...shot, x, y, flown });
+    else drop(x, y);
   }
   return flying;
 }
@@ -644,8 +725,8 @@ function burn(vessels: Vessel[], config: Config, events: WorldEvent[]): void {
   }
 }
 
-/** The first vessel afloat on the other side that the Arrow or Fireball touches on its way along the step. */
-function firstHit(shot: Arrow | Fireball, dx: number, dy: number, vessels: Vessel[], config: Config): Vessel | undefined {
+/** The first vessel afloat on the other side that the Arrow, cannonball or Fireball touches on its way along the step. */
+function firstHit(shot: Arrow | Cannonball | Fireball, dx: number, dy: number, vessels: Vessel[], config: Config): Vessel | undefined {
   return vessels
     .filter((vessel) => sideOf(vessel) !== shot.side && vessel.health > 0)
     .filter((vessel) => distanceToSegment(vessel, shot, dx, dy) <= config.vesselClasses[vessel.vesselClass].radius)
@@ -802,10 +883,9 @@ function fireVolleys(vessels: Vessel[], levels: CabinLevels, config: Config): Ar
       sideOf(vessel) === 'player'
         ? playerStats(vessel.vesselClass, levels, config)
         : { volleySize: config.vesselClasses[vessel.vesselClass].volleySize, volleySeconds: config.volleySeconds };
-    const aim = leadAim(vessel, target, config);
+    const aim = leadAim(vessel, target, config.arrowSpeed);
     const flaming = sideOf(vessel) === 'player' && levels.flamingArrows > 0;
-    for (let i = 0; i < volleySize; i++) {
-      const heading = aim + (i - (volleySize - 1) / 2) * config.volleySpread;
+    for (const heading of fanOut(aim, volleySize, config.volleySpread)) {
       fired.push({ side: sideOf(vessel), x: vessel.x, y: vessel.y, heading, damage: arrowDamage, flaming, flown: 0 });
     }
     vessel.volleyTicks = ticksFor(volleySeconds);
@@ -814,14 +894,44 @@ function fireVolleys(vessels: Vessel[], levels: CabinLevels, config: Config): Ar
 }
 
 /**
- * The heading at which an Arrow from the vessel meets the target, if the target keeps its velocity.
- * When no Arrow can catch the target, the heading toward where it is now.
+ * Each vessel whose cannons are ready fires them all at the same moment at the closest vessel on the other side
+ * within cannon range, aimed where that vessel will be when the cannonballs get there. The cannonballs fan out
+ * evenly around the aim. The Targeting rule doesn't apply.
  */
-function leadAim(vessel: Vessel, target: Vessel, config: Config): number {
+function fireCannons(vessels: Vessel[], config: Config): Cannonball[] {
+  const fired: Cannonball[] = [];
+  for (const vessel of vessels) {
+    if (vessel.health === 0 || vessel.cannons === 0) continue;
+    if (vessel.cannonTicks > 0) vessel.cannonTicks--;
+    if (vessel.cannonTicks > 0) continue;
+    const target = pickTarget(
+      vessel,
+      vessels.filter((other) => sideOf(other) !== sideOf(vessel)),
+      config.cannonRange,
+    );
+    if (!target) continue;
+    for (const heading of fanOut(leadAim(vessel, target, config.cannonSpeed), vessel.cannons, config.cannonSpread)) {
+      fired.push({ side: sideOf(vessel), x: vessel.x, y: vessel.y, heading, damage: config.cannonDamage, flown: 0 });
+    }
+    vessel.cannonTicks = ticksFor(config.cannonReloadSeconds);
+  }
+  return fired;
+}
+
+/** Headings for this many shots, the angle apart, centred on the aim. */
+function fanOut(aim: number, count: number, angle: number): number[] {
+  return Array.from({ length: count }, (_, i) => aim + (i - (count - 1) / 2) * angle);
+}
+
+/**
+ * The heading at which a shot from the vessel, flying at the speed, meets the target, if the target keeps its
+ * velocity. When no shot can catch the target, the heading toward where it is now.
+ */
+function leadAim(vessel: Vessel, target: Vessel, speed: number): number {
   const [dx, dy] = [target.x - vessel.x, target.y - vessel.y];
   const v = velocity(target);
-  // The flight time t at which the target, at (dx, dy) + v * t, is arrowSpeed * t away: a * t^2 + b * t + c = 0.
-  const a = v.x ** 2 + v.y ** 2 - config.arrowSpeed ** 2;
+  // The flight time t at which the target, at (dx, dy) + v * t, is speed * t away: a * t^2 + b * t + c = 0.
+  const a = v.x ** 2 + v.y ** 2 - speed ** 2;
   const b = 2 * (dx * v.x + dy * v.y);
   const c = dx ** 2 + dy ** 2;
   const root = Math.sqrt(b ** 2 - 4 * a * c);

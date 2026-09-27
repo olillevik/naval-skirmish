@@ -8,6 +8,7 @@ import {
   TICK_SECONDS,
   type Arrow,
   type CabinAction,
+  type Cannonball,
   type Commands,
   type Config,
   type Fireball,
@@ -68,6 +69,14 @@ const HIT_FLASH_MS = 100;
 const ARROW_LENGTH = 12;
 const ARROW_WIDTH = 2;
 const ARROW_COLOUR = 0x3b2a1a;
+const CANNONBALL_RADIUS = 4;
+const CANNONBALL_COLOUR = 0x1a1a1a;
+/** A cannonball that hits shows a small blast, this wide, px. */
+const CANNONBALL_HIT_SIZE = 40;
+/** A cannonball that drops into the sea leaves a white ring that widens to this radius, px, and fades. */
+const SPLASH_RADIUS = 16;
+const SPLASH_COLOUR = 0xffffff;
+const SPLASH_MS = 400;
 /** The pack's explosion sprites, smallest first, so the blast grows. */
 const EXPLOSION_FRAMES = ['explosion3', 'explosion2', 'explosion1'];
 const EXPLOSION_FPS = 15;
@@ -99,7 +108,7 @@ export class GameScene extends Scene {
   private enemies = new Map<number, VesselSprite>();
   /** One image per Fireball in flight, reused from frame to frame. */
   private fireballs: GameObjects.Image[] = [];
-  /** The Arrows and the enemies' health bars, drawn afresh each frame. */
+  /** The Arrows, the cannonballs and the enemies' health bars, drawn afresh each frame. */
   private overlay!: GameObjects.Graphics;
   private keys!: Keys;
   /** True once 1 or Space is pressed, until the next tick takes the press. */
@@ -340,7 +349,7 @@ export class GameScene extends Scene {
   }
 
   private draw(events: WorldEvent[]): void {
-    const { player, enemies, arrows, fireballs, wave, waveStatus, countdown, gold } = readState(this.world);
+    const { player, enemies, arrows, cannonballs, fireballs, wave, waveStatus, countdown, gold } = readState(this.world);
     // Buying a vessel in the Cabin swaps the sheet.
     const { sheet } = PLAYER_VESSELS[player.vesselClass]!;
     if (this.dinghy.hull.texture.key !== sheet) this.dinghy.hull.setTexture(sheet);
@@ -348,11 +357,19 @@ export class GameScene extends Scene {
     this.overlay.clear();
     this.drawEnemies(enemies, events);
     this.drawArrows(arrows);
+    this.drawCannonballs(cannonballs);
     this.drawFireballs(fireballs);
     for (const event of events) {
-      const hurt = event.type === 'fireballHit' ? event.vesselIds : event.type === 'arrowHit' || event.type === 'rammed' ? [event.vesselId] : [];
+      const hurt =
+        event.type === 'fireballHit'
+          ? event.vesselIds
+          : event.type === 'arrowHit' || event.type === 'cannonballHit' || event.type === 'rammed'
+            ? [event.vesselId]
+            : [];
       for (const id of hurt) this.flashHit(id === player.id ? this.dinghy : this.enemies.get(id));
-      if (event.type === 'fireballHit') this.explode(event.x, event.y);
+      if (event.type === 'fireballHit') this.explode(event.x, event.y, defaultConfig.fireballSplashRadius * 2);
+      if (event.type === 'cannonballHit') this.explode(event.x, event.y, CANNONBALL_HIT_SIZE);
+      if (event.type === 'cannonballSplash') this.splash(event.x, event.y);
     }
     setText(this.waveLabel, `Wave ${wave}`);
     this.countdownLabel.hidden = waveStatus !== 'countdown';
@@ -454,6 +471,11 @@ export class GameScene extends Scene {
     }
   }
 
+  private drawCannonballs(cannonballs: Cannonball[]): void {
+    this.overlay.fillStyle(CANNONBALL_COLOUR);
+    for (const { x, y } of cannonballs) this.overlay.fillCircle(x, y, CANNONBALL_RADIUS);
+  }
+
   /** Each Fireball is the pack's fire sprite, with the flames trailing behind it. */
   private drawFireballs(fireballs: Fireball[]): void {
     while (this.fireballs.length < fireballs.length) {
@@ -467,12 +489,17 @@ export class GameScene extends Scene {
     }
   }
 
-  /** The blast grows until its biggest frame covers the Fireball's splash. */
-  private explode(x: number, y: number): void {
+  /** The blast grows until its biggest frame is the size across, px. A Fireball's covers its splash. */
+  private explode(x: number, y: number, size: number): void {
     const biggest = this.textures.getFrame(EXPLOSION_FRAMES[EXPLOSION_FRAMES.length - 1]);
-    const scale = (defaultConfig.fireballSplashRadius * 2) / biggest.width;
+    const scale = size / biggest.width;
     const blast = this.add.sprite(x, y, EXPLOSION_FRAMES[0]).setDepth(2).setScale(scale).play('explosion');
     blast.once('animationcomplete', () => blast.destroy());
+  }
+
+  private splash(x: number, y: number): void {
+    const ring = this.add.circle(x, y, SPLASH_RADIUS).setStrokeStyle(3, SPLASH_COLOUR).setDepth(2).setScale(0.2);
+    this.tweens.add({ targets: ring, scale: 1, alpha: 0, duration: SPLASH_MS, onComplete: () => ring.destroy() });
   }
 
   private flashHit(sprite: VesselSprite | undefined): void {

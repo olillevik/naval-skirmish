@@ -19,6 +19,11 @@ export const defaultConfig: Config = {
   arrowSpeed: 400,
   volleySeconds: 1,
   volleySpread: 0.1,
+  cannonRange: 350,
+  cannonSpeed: 350,
+  cannonDamage: 10,
+  cannonReloadSeconds: 3,
+  cannonSpread: 0.1,
   fireballDamage: 20,
   fireballSplashRadius: 80,
   fireballBurn: { damagePerSecond: 2, burnSeconds: 3 },
@@ -42,13 +47,13 @@ export const defaultConfig: Config = {
   rammingSpeed: 300,
   vesselClasses: {
     // The sprite is 16 x 26 px, drawn at 2x.
-    smallDinghy: { topSpeed: 150, acceleration: 100, turnRate: Math.PI / 2, radius: 20, health: 100, volleySize: 1, arrowDamage: 5, gold: 0 },
+    smallDinghy: { topSpeed: 150, acceleration: 100, turnRate: Math.PI / 2, radius: 20, health: 100, volleySize: 1, arrowDamage: 5, cannons: 0, highestCannons: 0, gold: 0 },
     // The enemy ship's model with white sails, bought in the Cabin. It gets going at 80% of the dinghy's rate.
-    smallShip: { topSpeed: 180, acceleration: 80, turnRate: Math.PI / 2, radius: 40, health: 160, volleySize: 1, arrowDamage: 5, gold: 0 },
+    smallShip: { topSpeed: 180, acceleration: 80, turnRate: Math.PI / 2, radius: 40, health: 160, volleySize: 1, arrowDamage: 5, cannons: 1, highestCannons: 2, gold: 0 },
     // The same boat as the player's, but weaker.
-    enemyDinghy: { topSpeed: 150, acceleration: 100, turnRate: Math.PI / 2, radius: 20, health: 30, volleySize: 1, arrowDamage: 5, gold: 5 },
+    enemyDinghy: { topSpeed: 150, acceleration: 100, turnRate: Math.PI / 2, radius: 20, health: 30, volleySize: 1, arrowDamage: 5, cannons: 0, highestCannons: 0, gold: 5 },
     // The sprite is 66 x 113 px, drawn at 1x. Faster than a dinghy, but slow to get going.
-    enemyShip: { topSpeed: 200, acceleration: 50, turnRate: Math.PI / 2, radius: 40, health: 120, volleySize: 3, arrowDamage: 5, gold: 20 },
+    enemyShip: { topSpeed: 200, acceleration: 50, turnRate: Math.PI / 2, radius: 40, health: 120, volleySize: 3, arrowDamage: 5, cannons: 1, highestCannons: 1, gold: 20 },
   },
   cabin: {
     repair: { prices: [10], healShare: 0.25 },

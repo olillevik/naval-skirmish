@@ -38,6 +38,11 @@ const config: Config = {
   arrowSpeed: 400,
   volleySeconds: 1,
   volleySpread: 0.1,
+  cannonRange: 350,
+  cannonSpeed: 350,
+  cannonDamage: 10,
+  cannonReloadSeconds: 3,
+  cannonSpread: 0.1,
   fireballDamage: 40,
   fireballSplashRadius: 80,
   fireballBurn: { damagePerSecond: 2, burnSeconds: 3 },
@@ -59,10 +64,10 @@ const config: Config = {
   rammingDamage: 10,
   rammingSpeed: 240,
   vesselClasses: {
-    smallDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 100, volleySize: 1, arrowDamage: 5, gold: 0 },
-    smallShip: { topSpeed: 150, acceleration: 24, turnRate: (Math.PI / 2) * 0.8, radius: 40, health: 160, volleySize: 1, arrowDamage: 5, gold: 0 },
-    enemyDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 30, volleySize: 1, arrowDamage: 5, gold: 5 },
-    enemyShip: { topSpeed: 160, acceleration: 15, turnRate: Math.PI / 4, radius: 40, health: 120, volleySize: 3, arrowDamage: 5, gold: 20 },
+    smallDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 100, volleySize: 1, arrowDamage: 5, cannons: 0, highestCannons: 0, gold: 0 },
+    smallShip: { topSpeed: 150, acceleration: 24, turnRate: (Math.PI / 2) * 0.8, radius: 40, health: 160, volleySize: 1, arrowDamage: 5, cannons: 1, highestCannons: 2, gold: 0 },
+    enemyDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 30, volleySize: 1, arrowDamage: 5, cannons: 0, highestCannons: 0, gold: 5 },
+    enemyShip: { topSpeed: 160, acceleration: 15, turnRate: Math.PI / 4, radius: 40, health: 120, volleySize: 3, arrowDamage: 5, cannons: 1, highestCannons: 1, gold: 20 },
   },
   cabin: {
     repair: { prices: [10], healShare: 0.25 },
@@ -388,10 +393,11 @@ function untilSpawned(world: World, commands: Commands = noCommands): World {
 
 const untilNoEnemies = (world: World) => until(world, (state) => state.enemies.length === 0);
 
-/** The default config with Arrows and ramming that do no damage, so a test about sailing never sinks a vessel. */
+/** The default config with Arrows, cannonballs and ramming that do no damage, so a test about sailing never sinks a vessel. */
 const harmless: Config = {
   ...defaultConfig,
   rammingDamage: 0,
+  cannonDamage: 0,
   vesselClasses: {
     smallDinghy: { ...defaultConfig.vesselClasses.smallDinghy, arrowDamage: 0 },
     smallShip: { ...defaultConfig.vesselClasses.smallShip, arrowDamage: 0 },
@@ -822,6 +828,123 @@ describe('Arrows', () => {
       expect(player.speed).toBe(150);
       expect(turnBetween(bearingTo(enemies[0], player), arrow.heading)).toBeCloseTo(0);
     });
+  });
+});
+
+const cannonballsOf = (state: WorldState, side: 'player' | 'enemy') => state.cannonballs.filter((cannonball) => cannonball.side === side);
+
+describe('cannons', () => {
+  /** Every spawn point is within cannon range, and the Crews' Arrows do no harm. */
+  const inRange: Config = { ...still, cannonRange: 1200 };
+  /** Cannonballs so slow that none lands during the test. */
+  const slow: Config = { ...inRange, cannonSpeed: 10 };
+  /** Wave 1 has one still enemy dinghy and one still enemy ship. */
+  const fleet = (config: Config) => ({ ...config, shipsFromWave: 1 });
+
+  it('are never fired by a dinghy, which has none', () => {
+    let world = untilSpawned(createWorld(1, inRange));
+    const { player, enemies } = readState(world);
+    expect([player.cannons, enemies[0].cannons]).toEqual([0, 0]);
+
+    for (let tick = 0; tick < 60 * 5; tick++) {
+      world = step(world, noCommands);
+      expect(readState(world).cannonballs).toEqual([]);
+    }
+  });
+
+  it('fire 1 cannonball at a time from an enemy ship, at the player vessel, with the configured damage, on the reload', () => {
+    const fired = step(untilSpawned(createWorld(1, fleet(slow))), noCommands);
+    const { player, enemies, cannonballs } = readState(fired);
+    const ship = enemies.find((enemy) => enemy.vesselClass === 'enemyShip')!;
+
+    expect(ship.cannons).toBe(1);
+    expect(cannonballs).toHaveLength(1);
+    expect(cannonballs[0]).toMatchObject({ side: 'enemy', x: ship.x, y: ship.y, damage: 10 });
+    expect(turnBetween(cannonballs[0].heading, bearingTo(ship, player))).toBeCloseTo(0);
+    // cannonReloadSeconds is 3 s, which is 180 ticks.
+    expect(readState(run(fired, noCommands, 179)).cannonballs).toHaveLength(1);
+    expect(readState(run(fired, noCommands, 180)).cannonballs).toHaveLength(2);
+  });
+
+  it('fire only at the closest enemy, and never at one out of cannon range', () => {
+    // Two enemy dinghies, and a player vessel with a cannon.
+    const armed = withClasses({ ...slow, waveSizeBase: 1 }, { cannons: 1 }, {});
+    const fired = step(untilSpawned(createWorld(1, armed)), noCommands);
+    const { player, enemies } = readState(fired);
+    const closest = [...enemies].sort((a, b) => distanceBetween(a, player) - distanceBetween(b, player))[0];
+    const [cannonball] = cannonballsOf(readState(fired), 'player');
+    expect(turnBetween(cannonball.heading, bearingTo(player, closest))).toBeCloseTo(0);
+
+    // Every enemy spawns at least 600 px from the player vessel.
+    let world = untilSpawned(createWorld(1, { ...armed, cannonRange: 500 }));
+    for (let tick = 0; tick < 60 * 5; tick++) {
+      world = step(world, noCommands);
+      expect(readState(world).cannonballs).toEqual([]);
+    }
+  });
+
+  it('fire every cannon on a vessel at the same moment, fanned out around the aim', () => {
+    const armed = withClasses(slow, { cannons: 3 }, {});
+    const fired = step(untilSpawned(createWorld(1, armed)), noCommands);
+    const { player, enemies } = readState(fired);
+    const aim = bearingTo(player, enemies[0]);
+    const cannonballs = cannonballsOf(readState(fired), 'player');
+
+    expect(cannonballs.map((cannonball) => turnBetween(aim, cannonball.heading).toFixed(3))).toEqual(['-0.100', '0.000', '0.100']);
+  });
+
+  describe('aimed where the target will be', () => {
+    /**
+     * One firing only, from a still enemy dinghy with a cannon, always within cannon range. The player vessel
+     * turns on the spot and is at top speed in one tick, and on the tick the cannon fires it sails side-on to the enemy.
+     */
+    const leading = withClasses(
+      { ...still, cannonReloadSeconds: 100, cannonRange: 2000 },
+      { topSpeed: 150, acceleration: 150 * 60, turnRate: Math.PI * 60, arrowDamage: 0 },
+      { cannons: 1, arrowDamage: 0 },
+    );
+    /** The world on the tick the cannon fires, with the player vessel sailing side-on. */
+    const fire = () => {
+      const spawned = untilSpawned(createWorld(1, leading));
+      const heading = bearingTo(readState(spawned).enemies[0], readState(spawned).player) + Math.PI / 2;
+      return { fired: step(spawned, steerTo(spawned, heading, 1)), heading };
+    };
+    const noEnemyCannonballs = (state: WorldState) => cannonballsOf(state, 'enemy').length === 0;
+
+    it('hit a vessel that keeps its course and speed, for the configured damage', () => {
+      const { fired, heading } = fire();
+      const { player, enemies } = readState(fired);
+      const [cannonball] = cannonballsOf(readState(fired), 'enemy');
+      // The cannonball leads the player vessel, well ahead of where it is now.
+      expect(Math.abs(turnBetween(bearingTo(enemies[0], player), cannonball.heading))).toBeGreaterThan(0.2);
+
+      const kept = readState(until(fired, noEnemyCannonballs, (world) => steerTo(world, heading, 1)));
+
+      expect(kept.player.health).toBe(90);
+      expect(kept.events).toContainEqual({ type: 'cannonballHit', vesselId: player.id, x: kept.player.x, y: kept.player.y });
+    });
+
+    it('miss a vessel that turns after they are fired, and drop into the sea at the end of the cannon range', () => {
+      const { fired, heading } = fire();
+      const { enemies } = readState(fired);
+      const turned = readState(until(fired, noEnemyCannonballs, (world) => steerTo(world, heading + Math.PI, 1)));
+
+      expect(turned.player.health).toBe(100);
+      const splashes = turned.events.filter((event) => event.type === 'cannonballSplash');
+      expect(splashes).toHaveLength(1);
+      expect(distanceBetween(splashes[0], enemies[0])).toBeCloseTo(2000);
+    });
+  });
+
+  it('hurt only the first enemy vessel they touch', () => {
+    // A crowd of enemy dinghies, and a player vessel whose cannons have a long reload and whose Arrows do no harm.
+    const armed = withClasses({ ...inRange, waveSizeBase: 20, cannonReloadSeconds: 100 }, { cannons: 1, arrowDamage: 0 }, { arrowDamage: 0 });
+    const fired = step(untilSpawned(createWorld(1, armed)), noCommands);
+    const landed = readState(until(fired, (state) => cannonballsOf(state, 'player').length === 0));
+    const hurt = landed.enemies.filter((enemy) => enemy.health < enemy.maxHealth);
+
+    expect(hurt).toHaveLength(1);
+    expect(hurt[0].maxHealth - hurt[0].health).toBeCloseTo(10);
   });
 });
 
@@ -1961,6 +2084,29 @@ describe('the small ship', () => {
     expect(readState(run(ship, full, 60)).player.speed).toBeCloseTo(smallShip.acceleration);
     expect(readState(run(ship, full, 180)).player.speed).toBeCloseTo(smallShip.topSpeed);
     expect(readState(run(ship, { ...noCommands, rudder: 1 }, 60)).player.heading).toBeCloseTo(smallShip.turnRate);
+  });
+
+  it('comes with 1 cannon, and shoots Arrows as well as cannonballs', () => {
+    const ship = buy(paid({ ...rich(0), cannonRange: 1200 }), 'smallShip');
+    expect(readState(ship).player.cannons).toBe(1);
+
+    const firing = until(ship, (state) => cannonballsOf(state, 'player').length > 0);
+    expect(cannonballsOf(readState(firing), 'player')).toHaveLength(1);
+    const shooting = until(ship, (state) => arrowsOf(state, 'player').length > 0);
+    expect(readState(shooting).player.vesselClass).toBe('smallShip');
+  });
+
+  it("fires cannonballs that don't burn, even once Flaming arrows are bought", () => {
+    // A small ship whose Crew shoots no Arrows, and cannonballs that don't sink the enemy.
+    const base = { ...rich(0), cannonRange: 1200, cannonDamage: 1 };
+    const cannonsOnly: Config = { ...base, vesselClasses: { ...base.vesselClasses, smallShip: { ...smallShip, volleySize: 0 } } };
+    const ship = buy(buy(paid(cannonsOnly), 'smallShip'), 'flamingArrows');
+    expect(itemOf(ship, 'flamingArrows')?.level).toBe(1);
+
+    const hit = readState(until(ship, (state) => state.events.some((event) => event.type === 'cannonballHit')));
+
+    expect(hit.enemies[0].health).toBeCloseTo(hit.enemies[0].maxHealth - 1);
+    expect(hit.enemies[0].burnTicks).toBe(0);
   });
 
   it('keeps every Upgrade level and applies it to the small ship', () => {
