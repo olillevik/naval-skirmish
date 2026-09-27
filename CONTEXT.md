@@ -98,6 +98,14 @@ _Avoid_: High score, record
 The currency the player earns by defeating enemies and spends on upgrades.
 _Avoid_: Upgrade points, coins, money
 
+**Upgrade**:
+A Cabin item bought with Gold that improves the player's vessel, Crew or Captain for the rest of the Run. Most Upgrades have levels.
+_Avoid_: Perk, power-up
+
+**Repair**:
+A Cabin item that restores part of the player vessel's health. It can be bought again and again.
+_Avoid_: Heal, fix
+
 **Cabin**:
 The paused screen where the player sets the Targeting rule and spends Gold.
 _Avoid_: Menu, shop, inventory
