@@ -67,6 +67,7 @@ const config: Config = {
     regen: { prices: [25, 50, 100], regenRate: 0.01 },
     arrowRate: { prices: [20, 40, 80], volleySeconds: [0.8, 0.65, 0.5] },
     volleySize: { prices: [30, 60, 120, 240], arrows: 1 },
+    flamingArrows: { prices: [80], damagePerSecond: 2, burnSeconds: 3 },
     fireballDamage: { prices: [30, 60, 120], damage: [55, 70, 90] },
     fireballCooldown: { prices: [30, 60, 120], cooldownSeconds: [5, 4, 3] },
     farthest: { prices: [25] },
@@ -1269,6 +1270,7 @@ const noPurchases = [
   { item: 'regen', level: 0, highestLevel: 3, nextPrice: 25, canBuy: false },
   { item: 'arrowRate', level: 0, highestLevel: 3, nextPrice: 20, canBuy: false },
   { item: 'volleySize', level: 0, highestLevel: 4, nextPrice: 30, canBuy: false },
+  { item: 'flamingArrows', level: 0, highestLevel: 1, nextPrice: 80, canBuy: false },
   { item: 'fireballDamage', level: 0, highestLevel: 3, nextPrice: 30, canBuy: false },
   { item: 'fireballCooldown', level: 0, highestLevel: 3, nextPrice: 30, canBuy: false },
   { item: 'farthest', level: 0, highestLevel: 1, nextPrice: 25, canBuy: false },
@@ -1386,6 +1388,7 @@ describe('Upgrades', () => {
       regen: [25, 50, 100],
       arrowRate: [20, 40, 80],
       volleySize: [30, 60, 120, 240],
+      flamingArrows: [80],
       fireballDamage: [30, 60, 120],
       fireballCooldown: [30, 60, 120],
     } satisfies Partial<Record<CabinItemName, number[]>>;
@@ -1535,7 +1538,7 @@ describe('Upgrades', () => {
   it('are refused once maxed, leaving the world unchanged', () => {
     const start = wealthy(rich(0));
 
-    const maxLevels = [['maxHealth', 3], ['regen', 3], ['arrowRate', 3], ['volleySize', 4], ['fireballDamage', 3], ['fireballCooldown', 3]] as const;
+    const maxLevels = [['maxHealth', 3], ['regen', 3], ['arrowRate', 3], ['volleySize', 4], ['flamingArrows', 1], ['fireballDamage', 3], ['fireballCooldown', 3]] as const;
     for (const [item, levels] of maxLevels) {
       const maxed = buy(start, item, levels);
       expect(buy(maxed, item)).toBe(maxed);
@@ -1547,7 +1550,7 @@ describe('Upgrades', () => {
     expect(itemOf(upgraded, 'maxHealth').level).toBe(1);
 
     const fresh = createWorld(1, rich(0));
-    expect(readState(fresh).cabin.map(({ level }) => level)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(readState(fresh).cabin.map(({ level }) => level)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     expect(readState(fresh).player.maxHealth).toBe(100);
   });
 });
@@ -1674,5 +1677,91 @@ describe('Targeting rules', () => {
     expect(afterLoss(setRule(thrown, 'highestHealth')).targetId).toBe(ship.id);
     // Under "closest" it goes for the other dinghy instead.
     expect(afterLoss(thrown).targetId).not.toBe(ship.id);
+  });
+});
+
+describe('Flaming arrows', () => {
+  const buyFlaming = (world: World) => applyCabinAction(world, { type: 'buy', item: 'flamingArrows' });
+  /**
+   * One still enemy per Wave, worth 100 Gold, that never hurts the player. Wave 1's has 10 health, so the
+   * player's first Arrow sinks it, and Wave 2's has 10 times the enemy health growth more. The player
+   * Crew fires a Volley every given number of seconds.
+   */
+  const burning = (volleySeconds: number, enemyHealthGrowth: number) =>
+    withClasses({ ...still, volleySeconds, enemyHealthGrowth }, { arrowDamage: 10 }, { health: 10, arrowDamage: 0, gold: 100 });
+  /** The world once Wave 1's enemy is sunk for Gold, with Flaming arrows bought or not. */
+  const paid = (config: Config, bought: boolean) => {
+    const world = until(untilSpawned(createWorld(1, config)), (state) => state.gold > 0);
+    return bought ? buyFlaming(world) : world;
+  };
+  const enemyOf = (world: World) => readState(world).enemies[0];
+  /** Plays until the player Crew's Arrows have hit Wave 2's enemy the given number of times. */
+  const untilHits = (world: World, hits: number) => {
+    let count = 0;
+    return until(world, (state) => {
+      if (state.wave === 2 && state.events.some((event) => event.type === 'arrowHit' && event.vesselId !== state.player.id)) count++;
+      return count === hits;
+    });
+  };
+
+  it('cost 80 Gold, can be bought once, and then show as maxed', () => {
+    const world = paid(burning(1, 9), false);
+    const itemOf = (current: World) => readState(current).cabin.find((entry) => entry.item === 'flamingArrows');
+    expect(readState(world).gold).toBe(100);
+    expect(itemOf(world)).toMatchObject({ level: 0, highestLevel: 1, nextPrice: 80, canBuy: true });
+
+    const bought = buyFlaming(world);
+
+    expect(readState(bought).gold).toBe(20);
+    expect(itemOf(bought)).toMatchObject({ level: 1, highestLevel: 1, nextPrice: null, canBuy: false });
+    expect(buyFlaming(bought)).toBe(bought);
+  });
+
+  it("don't burn before they are bought", () => {
+    const hit = untilHits(paid(burning(5, 9), false), 1);
+    expect(enemyOf(hit)).toMatchObject({ health: 90, burnTicks: 0 });
+
+    expect(enemyOf(run(hit, noCommands, 120)).health).toBe(90);
+  });
+
+  it('set the target burning for 3 s at 2 damage per second after they are bought', () => {
+    // The next Volley lands 5 s after this one, so nothing else hurts the enemy.
+    const hit = untilHits(paid(burning(5, 9), true), 1);
+    expect(enemyOf(hit)).toMatchObject({ health: 90, burnTicks: 180 });
+
+    const halfway = enemyOf(run(hit, noCommands, 90));
+    expect(halfway.burnTicks).toBe(90);
+    expect(halfway.health).toBeCloseTo(87);
+    const burnedOut = run(hit, noCommands, 180);
+    expect(enemyOf(burnedOut).burnTicks).toBe(0);
+    expect(enemyOf(burnedOut).health).toBeCloseTo(84);
+    expect(enemyOf(run(burnedOut, noCommands, 60)).health).toBe(enemyOf(burnedOut).health);
+  });
+
+  it('restart the time on a new hit without stacking the damage', () => {
+    // A Volley lands every second, while the first burn still has 2 s left.
+    const second = untilHits(paid(burning(1, 9), true), 2);
+    const { health, burnTicks } = enemyOf(second);
+    expect(burnTicks).toBe(180);
+    expect(health).toBeCloseTo(100 - 10 - 2 - 10);
+
+    expect(enemyOf(run(second, noCommands, 30)).health).toBeCloseTo(health - 1);
+  });
+
+  it('can sink an enemy, which credits full Gold and counts toward the Wave', () => {
+    // Wave 2's enemy has 15 health, so the burn sinks it 2.5 s after the one Arrow hit.
+    const hit = untilHits(paid(burning(5, 0.5), true), 1);
+    expect(enemyOf(hit).health).toBeCloseTo(5);
+    const { id } = enemyOf(hit);
+
+    const sunk = until(hit, (state) => state.events.some((event) => event.type === 'vesselSunk'));
+
+    expect(readState(sunk).events).toEqual([
+      { type: 'vesselSunk', vesselId: id },
+      { type: 'goldCredited', vesselId: id, gold: 100 },
+    ]);
+    expect(readState(sunk).gold).toBe(120);
+    expect(enemyOf(sunk).burnTicks).toBe(0);
+    expect(readState(until(sunk, (state) => state.waveStatus === 'countdown'))).toMatchObject({ wave: 3, score: 2 });
   });
 });

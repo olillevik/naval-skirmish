@@ -52,7 +52,7 @@ const WIZARD_COLOUR = 0xa64dff;
 const WIZARD_GLOW_SCALE = 1.8;
 const WIZARD_GLOW_PULSE_MS = 800;
 const WIZARD_FLAG_SCALE = 2;
-/** A vessel below this share of its max health shows fire, since the kit has no damaged hulls. */
+/** A vessel below this share of its max health shows fire, since the kit has no damaged hulls. A burning vessel shows it too. */
 const FIRE_BELOW = 0.4;
 /** Small enough that the hull shows around the flames. */
 const FIRE_SCALE = 0.6;
@@ -423,7 +423,7 @@ export class GameScene extends Scene {
     // The container never turns, except in the fall. The hull shows the heading by its frame instead.
     sprite.body.setPosition(vessel.x, vessel.y);
     sprite.hull.setFrame(frameForHeading(vessel.heading));
-    sprite.fire.setVisible(vessel.health < vessel.maxHealth * FIRE_BELOW);
+    sprite.fire.setVisible(vessel.health < vessel.maxHealth * FIRE_BELOW || vessel.burnTicks > 0);
     if (sprite.wizardGlow) this.drawWizardGlow(sprite.wizardGlow);
   }
 

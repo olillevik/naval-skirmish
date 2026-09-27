@@ -99,6 +99,11 @@ export interface Config {
     arrowRate: CabinItemConfig & { volleySeconds: number[] };
     /** Each level adds this many Arrows to the player Crew's Volleys. */
     volleySize: CabinItemConfig & { arrows: number };
+    /**
+     * Once bought, every Arrow the player Crew lands sets its target burning for burnSeconds, taking
+     * damagePerSecond. A new hit restarts the time. Burns don't stack.
+     */
+    flamingArrows: CabinItemConfig & { damagePerSecond: number; burnSeconds: number };
     /** The damage of the Captain's Fireballs at each level from 1. Level 0 is fireballDamage. */
     fireballDamage: CabinItemConfig & { damage: number[] };
     /** The Captain's Fireball cooldown at each level from 1, in seconds. Level 0 is fireballCooldownSeconds. */
@@ -122,6 +127,7 @@ export type CabinItemName =
   | 'regen'
   | 'arrowRate'
   | 'volleySize'
+  | 'flamingArrows'
   | 'fireballDamage'
   | 'fireballCooldown'
   | Exclude<TargetingRule, 'closest'>;
@@ -196,6 +202,8 @@ export interface Vessel {
   regenDelayTicks: number;
   /** Ticks left before a sinking vessel is removed. */
   sinkingTicks: number;
+  /** Ticks left of the burn a Flaming arrow set. 0 means the vessel isn't burning. */
+  burnTicks: number;
 }
 
 /** Flies straight until it hits a vessel on the other side or has flown the Arrow range. */
@@ -206,6 +214,8 @@ export interface Arrow {
   y: number;
   heading: number;
   damage: number;
+  /** Fired by the player Crew once Flaming arrows are bought. A hit sets the target burning. */
+  flaming: boolean;
   /** px flown so far. */
   flown: number;
 }
@@ -336,7 +346,7 @@ export function createWorld(seed: number, config: Config): World {
     nextId: 1,
     touching: [],
     cabinLevels: {
-      repair: 0, maxHealth: 0, regen: 0, arrowRate: 0, volleySize: 0, fireballDamage: 0,
+      repair: 0, maxHealth: 0, regen: 0, arrowRate: 0, volleySize: 0, flamingArrows: 0, fireballDamage: 0,
       fireballCooldown: 0,
       farthest: 0,
       lowestHealth: 0,
@@ -387,6 +397,7 @@ function newVessel(
     fireballTicks: 0,
     regenDelayTicks: 0,
     sinkingTicks: 0,
+    burnTicks: 0,
   };
 }
 
@@ -436,6 +447,7 @@ const cabinRules: Record<CabinItemName, CabinRule> = {
   regen: upgrade,
   arrowRate: upgrade,
   volleySize: upgrade,
+  flamingArrows: upgrade,
   fireballDamage: upgrade,
   fireballCooldown: upgrade,
   farthest: upgrade,
@@ -523,6 +535,7 @@ export function step(world: World, commands: Commands): World {
   regenerate(moved[0], stats.regenRate);
   const touching = ram(moved, world.touching, config, events);
   const afloat = pushApart(moved, config).map((vessel) => feelRimCurrent(vessel, config));
+  burn(afloat, config, events);
   const arrows = [...flyArrows(state.arrows, afloat, config, events), ...fireVolleys(afloat, world.cabinLevels, config)];
   const flying = flyFireballs(state.fireballs, afloat, state.targetingRule, config, events);
 
@@ -588,6 +601,7 @@ function flyArrows(arrows: Arrow[], vessels: Vessel[], config: Config, events: W
     const hit = firstHit(arrow, dx, dy, vessels, config);
     if (hit) {
       damage(hit, arrow.damage, config);
+      if (arrow.flaming && hit.health > 0) hit.burnTicks = ticksFor(config.cabin.flamingArrows.burnSeconds);
       events.push({ type: 'arrowHit', vesselId: hit.id });
       if (hit.health === 0) events.push({ type: 'vesselSunk', vesselId: hit.id });
       continue;
@@ -596,6 +610,16 @@ function flyArrows(arrows: Arrow[], vessels: Vessel[], config: Config, events: W
     if (flown < config.arrowRange) flying.push({ ...arrow, x: arrow.x + dx, y: arrow.y + dy, flown });
   }
   return flying;
+}
+
+/** Each burning vessel afloat takes one tick of burn damage, and can sink from it. */
+function burn(vessels: Vessel[], config: Config, events: WorldEvent[]): void {
+  for (const vessel of vessels) {
+    if (vessel.burnTicks === 0 || vessel.health === 0) continue;
+    vessel.burnTicks--;
+    damage(vessel, config.cabin.flamingArrows.damagePerSecond * TICK_SECONDS, config);
+    if (vessel.health === 0) events.push({ type: 'vesselSunk', vesselId: vessel.id });
+  }
 }
 
 /** The first vessel afloat on the other side that the Arrow or Fireball touches on its way along the step. */
@@ -711,11 +735,14 @@ function pickTarget(from: Vector, others: Vessel[], range: number, rule: Targeti
     .sort((a, b) => order(a.other, a.distance) - order(b.other, b.distance) || a.distance - b.distance)[0]?.other;
 }
 
-/** Restarts the regen delay. At zero health the vessel starts sinking. */
+/** Restarts the regen delay. At zero health the vessel starts sinking, and stops burning. */
 function damage(vessel: Vessel, amount: number, config: Config): void {
   vessel.health = Math.max(0, vessel.health - amount);
   vessel.regenDelayTicks = ticksFor(config.regenDelaySeconds);
-  if (vessel.health === 0) vessel.sinkingTicks = ticksFor(config.sinkingSeconds);
+  if (vessel.health === 0) {
+    vessel.sinkingTicks = ticksFor(config.sinkingSeconds);
+    vessel.burnTicks = 0;
+  }
 }
 
 /** The closest a point comes to the path from the start by the step, px. */
@@ -727,7 +754,8 @@ function distanceToSegment(point: Vector, start: Vector, dx: number, dy: number)
 /**
  * Each Crew whose Volley is ready fires it at the closest vessel on the other side within Arrow range,
  * aimed where that vessel will be when the Arrow gets there. The Arrows fan out evenly around the aim.
- * The player Crew's Volley size and time between Volleys have the Upgrade levels applied.
+ * The player Crew's Volley size and time between Volleys have the Upgrade levels applied, and its Arrows
+ * are flaming once Flaming arrows are bought.
  */
 function fireVolleys(vessels: Vessel[], levels: CabinLevels, config: Config): Arrow[] {
   const fired: Arrow[] = [];
@@ -747,9 +775,10 @@ function fireVolleys(vessels: Vessel[], levels: CabinLevels, config: Config): Ar
         ? playerStats(vessel.vesselClass, levels, config)
         : { volleySize: config.vesselClasses[vessel.vesselClass].volleySize, volleySeconds: config.volleySeconds };
     const aim = leadAim(vessel, target, config);
+    const flaming = sideOf(vessel) === 'player' && levels.flamingArrows > 0;
     for (let i = 0; i < volleySize; i++) {
       const heading = aim + (i - (volleySize - 1) / 2) * config.volleySpread;
-      fired.push({ side: sideOf(vessel), x: vessel.x, y: vessel.y, heading, damage: arrowDamage, flown: 0 });
+      fired.push({ side: sideOf(vessel), x: vessel.x, y: vessel.y, heading, damage: arrowDamage, flaming, flown: 0 });
     }
     vessel.volleyTicks = ticksFor(volleySeconds);
   }
