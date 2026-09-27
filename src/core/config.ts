@@ -7,4 +7,7 @@ export const defaultConfig: Config = {
   throttleRate: 1 / 1.5,
   acceleration: 100,
   turnRate: Math.PI / 2,
+  rimCurrentStart: 0.8,
+  pointOfNoReturn: 0.95,
+  fallSeconds: 1,
 };

@@ -1,6 +1,6 @@
-import { Scene, type GameObjects, type Input } from 'phaser';
+import { Scene, type GameObjects, type Input, type Tweens } from 'phaser';
 import { defaultConfig } from '../core/config';
-import { createWorld, readState, step, TICK_SECONDS, type Commands, type World } from '../core/world';
+import { createWorld, readState, step, TICK_SECONDS, type Commands, type Config, type World } from '../core/world';
 import { installTestHook } from './testHook';
 
 const DINGHY_SCALE = 2;
@@ -12,6 +12,9 @@ const MAX_FRAME_SECONDS = 0.25;
 const SPACE_COLOUR = 0x0b0e1f;
 const EDGE_COLOUR = 0xeaf6ff;
 const EDGE_WIDTH = 6;
+const RIM_CURRENT_MARKER_COLOUR = 0x3d8fc4;
+const RIM_CURRENT_MARKER_WIDTH = 4;
+const RING_SEGMENTS = 256;
 /** How far past the Edge space is drawn. Wider than half of any screen, so the view never runs out of stars. */
 const SPACE_DEPTH = 2500;
 const STARS_PER_SQUARE_PX = 1 / 15000;
@@ -23,6 +26,9 @@ export class GameScene extends Scene {
   private dinghy!: GameObjects.Image;
   private keys!: Keys;
   private accumulator = 0;
+  private fall?: Tweens.Tween;
+  private edgeWarning = document.getElementById('edge-warning')!;
+  private gameOverScreen = document.getElementById('game-over')!;
   /** False while a screen such as the start screen is showing, so the world doesn't tick. */
   private running = false;
 
@@ -38,13 +44,17 @@ export class GameScene extends Scene {
 
   create(): void {
     this.world = createWorld(Date.now(), defaultConfig);
-    this.drawArena(defaultConfig.arenaRadius);
+    this.drawArena(defaultConfig);
     this.dinghy = this.add.image(0, 0, 'dinghy').setScale(DINGHY_SCALE);
     this.cameras.main.startFollow(this.dinghy);
     this.keys = this.input.keyboard!.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT') as Keys;
     this.draw();
     installTestHook(() => readState(this.world));
     this.showStartScreen();
+    document.getElementById('new-run')!.addEventListener('click', () => {
+      this.gameOverScreen.hidden = true;
+      this.startRun();
+    });
   }
 
   update(_time: number, deltaMs: number): void {
@@ -55,13 +65,35 @@ export class GameScene extends Scene {
       this.world = step(this.world, commands);
       this.accumulator -= TICK_SECONDS;
     }
-    this.draw();
+
+    const { run, pastPointOfNoReturn } = readState(this.world);
+    this.edgeWarning.hidden = !pastPointOfNoReturn || run === 'ended';
+    // Once the Dinghy has crossed the Edge, the fall animation owns its scale, alpha and rotation.
+    if (!this.fall) this.draw();
+    if (run !== 'sailing' && !this.fall) {
+      this.fall = this.tweens.add({
+        targets: this.dinghy,
+        scale: 0,
+        alpha: 0,
+        angle: '+=720',
+        duration: defaultConfig.fallSeconds * 1000,
+        ease: 'Quad.easeIn',
+      });
+    }
+    if (run === 'ended') {
+      this.running = false;
+      this.gameOverScreen.hidden = false;
+    }
   }
 
-  /** Starts a fresh Run. The start screen calls this, and a game-over screen can too. */
+  /** Starts a fresh Run. The start screen and the game-over screen call this. */
   private startRun(): void {
     this.world = createWorld(Date.now(), defaultConfig);
     this.accumulator = 0;
+    this.fall?.remove();
+    this.fall = undefined;
+    this.dinghy.setScale(DINGHY_SCALE).setAlpha(1);
+    this.draw();
     this.running = true;
   }
 
@@ -91,21 +123,23 @@ export class GameScene extends Scene {
   }
 
   /**
-   * Water fills a square around the Arena. A ring of space colour covers everything outside
-   * the disc, then stars go on the ring and the Edge is stroked on top.
+   * Water fills a square around the Arena, with a ring where the Rim current starts. A ring of space
+   * colour covers everything outside the disc, then stars go on the ring and the Edge is stroked on top.
    */
-  private drawArena(radius: number): void {
+  private drawArena({ arenaRadius: radius, rimCurrentStart }: Config): void {
     this.add.tileSprite(0, 0, radius * 2, radius * 2, 'water');
 
     const space = this.add.graphics();
+    space.lineStyle(RIM_CURRENT_MARKER_WIDTH, RIM_CURRENT_MARKER_COLOUR, 0.7);
+    strokeRing(space, radius * rimCurrentStart);
+
     const outer = radius + SPACE_DEPTH;
-    const segments = 256;
     // Overlap the inner rim slightly so the straight segments leave no water showing past the Edge.
     const inner = radius - EDGE_WIDTH / 2;
     space.fillStyle(SPACE_COLOUR);
-    for (let i = 0; i < segments; i++) {
-      const a = (i / segments) * Math.PI * 2;
-      const b = ((i + 1) / segments) * Math.PI * 2;
+    for (let i = 0; i < RING_SEGMENTS; i++) {
+      const a = (i / RING_SEGMENTS) * Math.PI * 2;
+      const b = ((i + 1) / RING_SEGMENTS) * Math.PI * 2;
       const [ix1, iy1, ox1, oy1] = [Math.cos(a) * inner, Math.sin(a) * inner, Math.cos(a) * outer, Math.sin(a) * outer];
       const [ix2, iy2, ox2, oy2] = [Math.cos(b) * inner, Math.sin(b) * inner, Math.cos(b) * outer, Math.sin(b) * outer];
       space.fillTriangle(ix1, iy1, ox1, oy1, ox2, oy2);
@@ -122,19 +156,23 @@ export class GameScene extends Scene {
       space.fillRect(Math.cos(angle) * distance, Math.sin(angle) * distance, size, size);
     }
 
-    // strokeCircle's default tessellation shows visible corners at this radius.
     space.lineStyle(EDGE_WIDTH, EDGE_COLOUR);
-    space.beginPath();
-    for (let i = 0; i < segments; i++) {
-      const a = (i / segments) * Math.PI * 2;
-      space.lineTo(Math.cos(a) * radius, Math.sin(a) * radius);
-    }
-    space.closePath();
-    space.strokePath();
+    strokeRing(space, radius);
   }
 
   private draw(): void {
     const { x, y, heading } = readState(this.world).dinghy;
     this.dinghy.setPosition(x, y).setRotation(heading + SPRITE_ROTATION);
   }
+}
+
+/** strokeCircle's default tessellation shows visible corners at the Arena's radius. */
+function strokeRing(graphics: GameObjects.Graphics, radius: number): void {
+  graphics.beginPath();
+  for (let i = 0; i < RING_SEGMENTS; i++) {
+    const a = (i / RING_SEGMENTS) * Math.PI * 2;
+    graphics.lineTo(Math.cos(a) * radius, Math.sin(a) * radius);
+  }
+  graphics.closePath();
+  graphics.strokePath();
 }

@@ -84,3 +84,28 @@ test('there is no rotate message on desktop', async ({ page }) => {
 
   await expect(page.getByTestId('rotate-message')).toBeHidden();
 });
+
+test('sailing over the Edge ends the Run, and a new Run resets the Dinghy', async ({ page }) => {
+  // Full throttle reaches the Edge in about 11 s, then the fall takes 1 s.
+  test.setTimeout(60_000);
+  await startRun(page);
+  const warning = page.getByTestId('edge-warning');
+  const gameOver = page.getByTestId('game-over');
+  await expect(warning).toBeHidden();
+
+  await page.keyboard.down('KeyW');
+  await page.waitForFunction(() => window.navalSkirmishTest!.state.pastPointOfNoReturn, null, { timeout: 30_000 });
+  await expect(warning).toBeVisible();
+  await expect(gameOver).toBeVisible({ timeout: 10_000 });
+  await page.keyboard.up('KeyW');
+  await expect(gameOver).toContainText('The Dinghy fell off the Edge');
+  expect((await page.evaluate(() => window.navalSkirmishTest!.state)).run).toBe('ended');
+
+  await page.getByTestId('new-run').click();
+
+  await expect(gameOver).toBeHidden();
+  await expect(warning).toBeHidden();
+  const state = await page.evaluate(() => window.navalSkirmishTest!.state);
+  expect(state.run).toBe('sailing');
+  expect(state.dinghy).toEqual({ x: 0, y: 0, heading: 0, speed: 0, throttle: 0 });
+});

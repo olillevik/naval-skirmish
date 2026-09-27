@@ -25,7 +25,30 @@
       .overlay[hidden] { display: none; }
       .overlay h1 { margin: 0; font-size: 2.5rem; }
       .overlay p { margin: 0; font-size: 1.25rem; }
+      .overlay button {
+        font: inherit;
+        font-size: 1.25rem;
+        padding: 0.75rem 1.5rem;
+        border: 0;
+        border-radius: 0.5rem;
+        color: #0b0e1f;
+        background: #eaf6ff;
+        cursor: pointer;
+      }
       #start-screen { cursor: pointer; }
+      #edge-warning {
+        position: fixed;
+        top: 1rem;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 0.5rem 1rem;
+        border-radius: 0.5rem;
+        font: bold 1.25rem system-ui, sans-serif;
+        color: #fff;
+        background: rgb(170 30 30 / 0.85);
+        pointer-events: none;
+        user-select: none;
+      }
       /* The game is landscape only. A coarse pointer means a phone or tablet, not a narrow desktop window. */
       #rotate-message { display: none; z-index: 1; background: #0b0e1f; }
       @media (orientation: portrait) and (pointer: coarse) {
@@ -37,6 +60,12 @@
     <div id="start-screen" class="overlay" data-testid="start-screen">
       <h1>Naval Skirmish</h1>
       <p>Tap or click to start</p>
+    </div>
+    <div id="edge-warning" data-testid="edge-warning" hidden>Past the point of no return!</div>
+    <div id="game-over" class="overlay" data-testid="game-over" hidden>
+      <h1>Game over</h1>
+      <p>The Dinghy fell off the Edge</p>
+      <button id="new-run" type="button" data-testid="new-run">New Run</button>
     </div>
     <div id="rotate-message" class="overlay" data-testid="rotate-message">
       <p>Turn your phone to landscape</p>

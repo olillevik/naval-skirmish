@@ -2,13 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { defaultConfig } from './config';
 import { createWorld, readState, step, type Commands, type Config, type World } from './world';
 
-/** Round numbers so expectations are easy to work out by hand at 60 ticks per second. */
+/**
+ * Round numbers so expectations are easy to work out by hand at 60 ticks per second.
+ * The Arena is big enough that the movement tests never reach the Rim current.
+ */
 const config: Config = {
-  arenaRadius: 1000,
+  arenaRadius: 5000,
   topSpeed: 120,
   throttleRate: 0.5,
   acceleration: 30,
   turnRate: Math.PI / 2,
+  rimCurrentStart: 0.8,
+  pointOfNoReturn: 0.95,
+  fallSeconds: 0.5,
 };
 const noCommands: Commands = { throttleUp: false, throttleDown: false, rudder: 0 };
 const up: Commands = { ...noCommands, throttleUp: true };
@@ -178,5 +184,83 @@ describe('determinism', () => {
     expect(readState(inFrames([60]))).toEqual(readState(oneAFrame));
     expect(readState(inFrames(Array(30).fill(2)))).toEqual(readState(oneAFrame));
     expect(readState(inFrames([7, 0, 13, 1, 39]))).toEqual(readState(oneAFrame));
+  });
+});
+
+describe('Rim current', () => {
+  /** Reaches full throttle and top speed in one tick, and turns 180 degrees in one tick at full rudder. */
+  const nimble: Config = { ...config, arenaRadius: 1000, throttleRate: 60, acceleration: 120 * 60, turnRate: Math.PI * 60 };
+  const turnAround: Commands = { ...up, rudder: 1 };
+  const distance = (world: World) => Math.hypot(readState(world).dinghy.x, readState(world).dinghy.y);
+
+  /** Sails at full throttle along the starting heading, or along +x, until this far out. */
+  function sailOutTo(fraction: number, along: 'up' | 'right' = 'up'): World {
+    let world = createWorld(1, nimble);
+    if (along === 'right') world = step(world, { ...noCommands, rudder: 0.5 });
+    while (distance(world) < fraction * nimble.arenaRadius) world = step(world, up);
+    return world;
+  }
+
+  it('is zero inside 80% of the radius', () => {
+    expect(readState(sailOutTo(0.79)).rimCurrent).toEqual({ x: 0, y: 0 });
+  });
+
+  it('points outward and grows toward the Edge', () => {
+    const near = readState(sailOutTo(0.85)).rimCurrent;
+    const far = readState(sailOutTo(0.9)).rimCurrent;
+    const sideways = readState(sailOutTo(0.9, 'right')).rimCurrent;
+
+    expect(near.x).toBeCloseTo(0);
+    expect(near.y).toBeLessThan(0);
+    expect(far.y).toBeLessThan(near.y);
+    expect(sideways.x).toBeGreaterThan(0);
+    expect(sideways.y).toBeCloseTo(0);
+  });
+
+  it('lets a Dinghy at full throttle escape from just inside 95% of the radius', () => {
+    const escaping = step(sailOutTo(0.94), turnAround);
+    const escaped = run(escaping, up, 300);
+
+    expect(distance(escaped)).toBeLessThan(0.8 * nimble.arenaRadius);
+    expect(readState(escaped).rimCurrent).toEqual({ x: 0, y: 0 });
+  });
+
+  it('does not let a Dinghy at full throttle escape from beyond 95% of the radius', () => {
+    const rowingInward = step(sailOutTo(0.96), turnAround);
+
+    expect(readState(rowingInward).dinghy.heading).toBeCloseTo(Math.PI);
+    expect(distance(run(rowingInward, up, 10))).toBeGreaterThan(distance(rowingInward));
+  });
+
+  it('marks the Dinghy past the point of no return only beyond 95% of the radius', () => {
+    expect(readState(createWorld(1, nimble)).pastPointOfNoReturn).toBe(false);
+    expect(readState(sailOutTo(0.94)).pastPointOfNoReturn).toBe(false);
+    expect(readState(sailOutTo(0.96)).pastPointOfNoReturn).toBe(true);
+  });
+
+  it('carries a Dinghy at zero throttle to the Edge, and the Run ends', () => {
+    const drifting = step(sailOutTo(0.85), down);
+
+    expect(readState(drifting).dinghy.speed).toBe(0);
+    expect(readState(run(drifting, noCommands, 600)).run).toBe('ended');
+  });
+});
+
+describe('the Run', () => {
+  /** Sails 20 px a tick from the first tick, so the Dinghy reaches the Edge in a few ticks. */
+  const quick: Config = { ...config, arenaRadius: 100, topSpeed: 1200, throttleRate: 60, acceleration: 1200 * 60 };
+
+  it('goes from sailing to falling to ended once the Dinghy crosses the Edge, and stays ended', () => {
+    let world = createWorld(1, quick);
+    while (readState(world).run === 'sailing') world = step(world, up);
+    const fell = readState(world);
+
+    expect(fell.run).toBe('falling');
+    expect(Math.hypot(fell.dinghy.x, fell.dinghy.y)).toBeGreaterThanOrEqual(100);
+    // fallSeconds is 0.5 s, which is 30 ticks.
+    expect(readState(run(world, up, 29)).run).toBe('falling');
+    const ended = run(world, up, 30);
+    expect(readState(ended).run).toBe('ended');
+    expect(readState(run(ended, { ...up, rudder: 1 }, 600))).toEqual(readState(ended));
   });
 });
