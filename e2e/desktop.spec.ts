@@ -1,8 +1,8 @@
 import { expect, test } from '@playwright/test';
+import { openGame, startRun } from './helpers';
 
 test('the Dinghy starts in the centre of the Arena', async ({ page }) => {
-  await page.goto('?test');
-  await page.waitForFunction(() => window.navalSkirmishTest !== undefined);
+  await startRun(page);
 
   const dinghy = await page.evaluate(() => window.navalSkirmishTest!.state.dinghy);
 
@@ -23,8 +23,7 @@ test('every asset loads', async ({ page }) => {
   });
   page.on('requestfailed', (request) => failed.push(request.url()));
 
-  await page.goto('?test');
-  await page.waitForFunction(() => window.navalSkirmishTest !== undefined);
+  await openGame(page);
 
   expect(failed).toEqual([]);
 });
@@ -34,8 +33,7 @@ for (const [name, throttleKey, rightKey] of [
   ['arrow keys', 'ArrowUp', 'ArrowRight'],
 ] as const) {
   test(`holding throttle then right with the ${name} moves and turns the Dinghy`, async ({ page }) => {
-    await page.goto('?test');
-    await page.waitForFunction(() => window.navalSkirmishTest !== undefined);
+    await startRun(page);
 
     await page.keyboard.down(throttleKey);
     await page.waitForTimeout(500);
@@ -52,3 +50,37 @@ for (const [name, throttleKey, rightKey] of [
     expect(afterTurn.throttle).toBe(afterThrottle.throttle);
   });
 }
+
+test('the Dinghy ignores the keyboard until the start screen is clicked', async ({ page }) => {
+  await openGame(page);
+  await expect(page.getByTestId('start-screen')).toBeVisible();
+
+  await page.keyboard.down('KeyW');
+  await page.waitForTimeout(300);
+  await page.keyboard.up('KeyW');
+  const beforeStart = await page.evaluate(() => window.navalSkirmishTest!.state.dinghy);
+  await page.getByTestId('start-screen').click();
+  await expect(page.getByTestId('start-screen')).toBeHidden();
+  await page.keyboard.down('KeyW');
+  await page.waitForTimeout(300);
+  await page.keyboard.up('KeyW');
+  const afterStart = await page.evaluate(() => window.navalSkirmishTest!.state.dinghy);
+
+  expect(beforeStart.throttle).toBe(0);
+  expect(afterStart.throttle).toBeGreaterThan(0);
+});
+
+test('the game fills the window and follows a resize', async ({ page }) => {
+  await startRun(page);
+  const canvas = page.locator('canvas');
+
+  await page.setViewportSize({ width: 900, height: 500 });
+
+  await expect.poll(() => canvas.boundingBox()).toEqual({ x: 0, y: 0, width: 900, height: 500 });
+});
+
+test('there is no rotate message on desktop', async ({ page }) => {
+  await openGame(page);
+
+  await expect(page.getByTestId('rotate-message')).toBeHidden();
+});

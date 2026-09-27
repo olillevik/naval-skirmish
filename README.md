@@ -2,7 +2,7 @@
 
 A top-down browser game about steering a small Dinghy across a round magical sea that ends in open space. The latest build of `main` is live at <https://olillevik.github.io/naval-skirmish/>.
 
-Right now you can sail the Dinghy around the Arena with the keyboard. W or ↑ raises the throttle, S or ↓ lowers it, and A/D or ←/→ turn. The throttle stays where you leave it. Nothing happens at the Edge yet, and phone controls are still to come.
+Right now you can sail the Dinghy around the Arena with the keyboard. Tap or click the start screen to begin a Run. On a phone, the tap also asks the browser for fullscreen, and the game asks you to turn the phone to landscape. W or ↑ raises the throttle, S or ↓ lowers it, and A/D or ←/→ turn. The throttle stays where you leave it. Nothing happens at the Edge yet, and phone controls are still to come.
 
 ## Run it
 
@@ -12,7 +12,7 @@ You need Node.js 22.12 or newer (CI uses Node.js 24). Install the dependencies o
 
 `npm test` runs the Vitest unit tests against the game core, with no browser. `npm run test:e2e` builds the game and runs the Playwright smoke tests against that build. Before the first browser run, install Chromium with `npx playwright install chromium`. `npm run typecheck` runs the TypeScript compiler.
 
-The browser tests read the game state through a read-only test hook, `window.navalSkirmishTest.state`. The hook exists only when the page URL has the `?test` flag.
+The browser tests read the game state through a read-only test hook, `window.navalSkirmishTest.state`. The hook exists only when the page URL has the `?test` flag. Each Playwright project runs the spec file with its name: `desktop`, `phone-landscape` and `phone-upright`.
 
 ## How the code is laid out
 

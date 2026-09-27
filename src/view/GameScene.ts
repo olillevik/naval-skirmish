@@ -23,6 +23,8 @@ export class GameScene extends Scene {
   private dinghy!: GameObjects.Image;
   private keys!: Keys;
   private accumulator = 0;
+  /** False while a screen such as the start screen is showing, so the world doesn't tick. */
+  private running = false;
 
   constructor() {
     super('game');
@@ -42,9 +44,11 @@ export class GameScene extends Scene {
     this.keys = this.input.keyboard!.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT') as Keys;
     this.draw();
     installTestHook(() => readState(this.world));
+    this.showStartScreen();
   }
 
   update(_time: number, deltaMs: number): void {
+    if (!this.running) return;
     const commands = this.readKeyboard();
     this.accumulator += Math.min(deltaMs / 1000, MAX_FRAME_SECONDS);
     while (this.accumulator >= TICK_SECONDS) {
@@ -52,6 +56,27 @@ export class GameScene extends Scene {
       this.accumulator -= TICK_SECONDS;
     }
     this.draw();
+  }
+
+  /** Starts a fresh Run. The start screen calls this, and a game-over screen can too. */
+  private startRun(): void {
+    this.world = createWorld(Date.now(), defaultConfig);
+    this.accumulator = 0;
+    this.running = true;
+  }
+
+  private showStartScreen(): void {
+    const startScreen = document.getElementById('start-screen')!;
+    startScreen.addEventListener(
+      'pointerup',
+      (event) => {
+        startScreen.hidden = true;
+        this.startRun();
+        // Fullscreen is only a nicety. A refusal, or a browser without it, must not stop the Run.
+        if (event.pointerType === 'touch') document.documentElement.requestFullscreen?.().catch(() => {});
+      },
+      { once: true },
+    );
   }
 
   private readKeyboard(): Commands {
