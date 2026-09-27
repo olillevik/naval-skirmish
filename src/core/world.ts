@@ -17,6 +17,8 @@ export interface Config {
   pointOfNoReturn: number;
   /** How long the Run stays falling after the player vessel crosses the Edge, in seconds. */
   fallSeconds: number;
+  /** How long a vessel at zero health sinks before it is removed, in seconds. The Run stays sinking as long. */
+  sinkingSeconds: number;
   /** The countdown before each Wave, in seconds. There is no skip. */
   waveCountdownSeconds: number;
   /** Wave n has this many enemy dinghies plus n. */
@@ -26,8 +28,20 @@ export interface Config {
   spawnOuter: number;
   /** The closest an enemy spawns to the player vessel, px. */
   minSpawnDistance: number;
-  /** How far an Arrow flies, px. Enemies circle the player vessel at about this range. */
+  /** How far an Arrow flies, px. A Crew only fires at a vessel this close. */
   arrowRange: number;
+  /** px/s. */
+  arrowSpeed: number;
+  /** The time between one Volley and the next from the same vessel, in seconds. */
+  volleySeconds: number;
+  /** The angle between neighbouring Arrows in one Volley, radians. */
+  volleySpread: number;
+  /** The player vessel regains this fraction of its max health each second, once regen has started. */
+  regenRate: number;
+  /** How long after the last damage the player vessel starts to regenerate, in seconds. */
+  regenDelaySeconds: number;
+  /** Enemies circle the player vessel at this fraction of the Arrow range, a little inside it so their Arrows reach. */
+  enemyCircleRange: number;
   /** Past this fraction of the Arena radius, or about to sail past it, an enemy steers back toward the centre. */
   enemyTurnBack: number;
   /**
@@ -38,7 +52,8 @@ export interface Config {
   vesselClasses: Record<VesselClassName, VesselClass>;
 }
 
-export type VesselClassName = 'smallDinghy';
+/** The player sails a smallDinghy. Enemy dinghies sail the same boat, but are weaker. */
+export type VesselClassName = 'smallDinghy' | 'enemyDinghy';
 
 /** The stats every vessel of one class shares. */
 export interface VesselClass {
@@ -50,7 +65,16 @@ export interface VesselClass {
   turnRate: number;
   /** Radius of the circle used for collisions, px. */
   radius: number;
+  /** Health at the start of a Run, or when the vessel spawns. */
+  health: number;
+  /** Arrows in each Volley. */
+  volleySize: number;
+  /** Health each of this vessel's Arrows takes off the vessel it hits. */
+  arrowDamage: number;
 }
+
+/** The player vessel is on one side, and every enemy vessel is on the other. */
+export type Side = 'player' | 'enemy';
 
 export interface Vessel {
   /** Unique within a Run. The player vessel is 0. */
@@ -67,9 +91,39 @@ export interface Vessel {
   rimCurrent: Vector;
   /** True once the Rim current is stronger than the vessel's top speed, so no rowing can escape it. */
   pastPointOfNoReturn: boolean;
+  /** 0 means the vessel is sinking. A sinking vessel no longer moves, shoots, blocks or takes hits. */
+  health: number;
+  maxHealth: number;
+  /** Ticks left before the Crew can fire the next Volley. A ready Crew fires as soon as an enemy is in range. */
+  volleyTicks: number;
+  /** Ticks left before regen starts. Only the player vessel regenerates. */
+  regenDelayTicks: number;
+  /** Ticks left before a sinking vessel is removed. */
+  sinkingTicks: number;
 }
 
-export type RunStatus = 'sailing' | 'falling' | 'ended';
+/** Flies straight until it hits a vessel on the other side or has flown the Arrow range. */
+export interface Arrow {
+  /** The side of the vessel that fired it. It never hurts that side. */
+  side: Side;
+  x: number;
+  y: number;
+  heading: number;
+  damage: number;
+  /** px flown so far. */
+  flown: number;
+}
+
+/** Something that happened during the last tick, for the view's effects. */
+export type WorldEvent =
+  | { type: 'arrowHit'; vesselId: number }
+  /** The vessel reached zero health and started sinking. */
+  | { type: 'vesselSunk'; vesselId: number }
+  | { type: 'vesselOverEdge'; vesselId: number };
+
+export type RunStatus = 'sailing' | 'falling' | 'sinking' | 'ended';
+
+export type EndCause = 'sank' | 'fell off the Edge';
 
 export interface Vector {
   x: number;
@@ -80,14 +134,19 @@ export type WaveStatus = 'countdown' | 'fighting';
 
 export interface WorldState {
   player: Vessel;
-  /** An enemy that crosses the Edge is lost and leaves this list. */
+  /** An enemy that crosses the Edge, or has finished sinking, is lost and leaves this list. */
   enemies: Vessel[];
+  arrows: Arrow[];
   run: RunStatus;
+  /** Why the Run is falling, sinking or ended. Null while sailing. */
+  endCause: EndCause | null;
   /** The Wave being counted down to or fought, from 1. */
   wave: number;
   waveStatus: WaveStatus;
   /** Seconds left before the Wave spawns. 0 while fighting. */
   countdown: number;
+  /** What happened during the last tick, in the order it happened. */
+  events: WorldEvent[];
 }
 
 /** What the player, or the enemy AI for an enemy vessel, asks for during one tick. */
@@ -104,8 +163,8 @@ export interface World {
   readonly seed: number;
   readonly config: Config;
   readonly state: WorldState;
-  /** Ticks spent falling so far. */
-  readonly fallTicks: number;
+  /** Ticks spent falling or sinking so far. */
+  readonly endingTicks: number;
   /** Ticks left before the Wave spawns. */
   readonly countdownTicks: number;
   /** The seeded random generator's state. */
@@ -118,25 +177,29 @@ export function createWorld(seed: number, config: Config): World {
   return {
     seed,
     config,
-    fallTicks: 0,
+    endingTicks: 0,
     countdownTicks,
     random: seed,
     nextId: 1,
     state: {
-      player: newVessel(0, 0, 0, 0),
+      player: newVessel(0, 'smallDinghy', 0, 0, 0, config),
       enemies: [],
+      arrows: [],
       run: 'sailing',
+      endCause: null,
       wave: 1,
       waveStatus: 'countdown',
       countdown: countdownTicks * TICK_SECONDS,
+      events: [],
     },
   };
 }
 
-function newVessel(id: number, x: number, y: number, heading: number): Vessel {
+function newVessel(id: number, vesselClass: VesselClassName, x: number, y: number, heading: number, config: Config): Vessel {
+  const { health } = config.vesselClasses[vesselClass];
   return {
     id,
-    vesselClass: 'smallDinghy',
+    vesselClass,
     x,
     y,
     heading,
@@ -144,11 +207,19 @@ function newVessel(id: number, x: number, y: number, heading: number): Vessel {
     throttle: 0,
     rimCurrent: { x: 0, y: 0 },
     pastPointOfNoReturn: false,
+    health,
+    maxHealth: health,
+    volleyTicks: 0,
+    regenDelayTicks: 0,
+    sinkingTicks: 0,
   };
 }
 
+const sideOf = (vessel: Vessel): Side => (vessel.id === 0 ? 'player' : 'enemy');
+const ticksFor = (seconds: number) => Math.round(seconds / TICK_SECONDS);
+
 function countdownTicksFor(config: Config): number {
-  return Math.round(config.waveCountdownSeconds / TICK_SECONDS);
+  return ticksFor(config.waveCountdownSeconds);
 }
 
 export function readState(world: World): WorldState {
@@ -157,31 +228,124 @@ export function readState(world: World): WorldState {
 
 /** Advances the world by one fixed tick of TICK_SECONDS. */
 export function step(world: World, commands: Commands): World {
-  const { config } = world;
-  // The player vessel stays where it crossed the Edge while it falls. The view draws the fall.
-  if (world.state.run === 'ended') return world;
-  if (world.state.run === 'falling') {
-    const fallTicks = world.fallTicks + 1;
-    const run = fallTicks >= Math.round(config.fallSeconds / TICK_SECONDS) ? 'ended' : 'falling';
-    return { ...world, fallTicks, state: { ...world.state, run } };
+  const { config, state } = world;
+  // Everything stays where it was while the player vessel falls or sinks. The view draws the fall or the wreck.
+  if (state.run === 'ended') return world;
+  if (state.run === 'falling' || state.run === 'sinking') {
+    const endingTicks = world.endingTicks + 1;
+    const run = endingTicks >= ticksFor(state.run === 'falling' ? config.fallSeconds : config.sinkingSeconds) ? 'ended' : state.run;
+    return { ...world, endingTicks, state: { ...state, run, events: [] } };
   }
 
-  const { state } = world;
+  const events: WorldEvent[] = [];
+  // A wreck stays put, and is removed once it has sunk for the sinking time.
+  const wrecks = state.enemies
+    .filter((enemy) => enemy.health === 0 && enemy.sinkingTicks > 1)
+    .map((wreck) => ({ ...wreck, sinkingTicks: wreck.sinkingTicks - 1 }));
   const moved = [
     sail(state.player, commands, config),
-    ...state.enemies.map((enemy) => sail(enemy, enemyCommands(enemy, state.player, config), config)),
+    ...state.enemies
+      .filter((enemy) => enemy.health > 0)
+      .map((enemy) => sail(enemy, enemyCommands(enemy, state.player, config), config)),
   ];
-  const [player, ...afloat] = pushApart(moved, config).map((vessel) => feelRimCurrent(vessel, config));
+  const afloat = pushApart(moved, config).map((vessel) => feelRimCurrent(vessel, config));
+  regenerate(afloat[0], config);
+  const arrows = [...flyArrows(state.arrows, afloat, config, events), ...fireVolleys(afloat, config)];
+
+  const [player, ...enemies] = afloat;
+  const overEdge = (vessel: Vessel) => Math.hypot(vessel.x, vessel.y) >= config.arenaRadius;
+  for (const vessel of afloat) {
+    if (vessel.health > 0 && overEdge(vessel)) events.push({ type: 'vesselOverEdge', vesselId: vessel.id });
+  }
+  const endCause: EndCause | null = player.health === 0 ? 'sank' : overEdge(player) ? 'fell off the Edge' : null;
   const next: World = {
     ...world,
     state: {
       ...state,
       player,
-      enemies: afloat.filter((enemy) => Math.hypot(enemy.x, enemy.y) < config.arenaRadius),
-      run: Math.hypot(player.x, player.y) >= config.arenaRadius ? 'falling' : 'sailing',
+      enemies: [...enemies.filter((enemy) => enemy.health === 0 || !overEdge(enemy)), ...wrecks],
+      arrows,
+      run: endCause === 'sank' ? 'sinking' : endCause ? 'falling' : 'sailing',
+      endCause,
+      events,
     },
   };
   return advanceWave(next);
+}
+
+/** The player vessel regains health once the regen delay after its last damage has run out. */
+function regenerate(player: Vessel, config: Config): void {
+  if (player.regenDelayTicks > 0) {
+    player.regenDelayTicks--;
+    return;
+  }
+  player.health = Math.min(player.maxHealth, player.health + player.maxHealth * config.regenRate * TICK_SECONDS);
+}
+
+/**
+ * Moves each Arrow one tick along its heading. An Arrow that touches a vessel on the other side hurts the
+ * first one it reaches and is removed. One that has flown the Arrow range is removed too.
+ */
+function flyArrows(arrows: Arrow[], vessels: Vessel[], config: Config, events: WorldEvent[]): Arrow[] {
+  const flying: Arrow[] = [];
+  for (const arrow of arrows) {
+    const distance = Math.min(config.arrowSpeed * TICK_SECONDS, config.arrowRange - arrow.flown);
+    const dx = Math.sin(arrow.heading) * distance;
+    const dy = -Math.cos(arrow.heading) * distance;
+    const hit = vessels
+      .filter((vessel) => sideOf(vessel) !== arrow.side && vessel.health > 0)
+      .filter((vessel) => distanceToSegment(vessel, arrow, dx, dy) <= config.vesselClasses[vessel.vesselClass].radius)
+      .sort((a, b) => Math.hypot(a.x - arrow.x, a.y - arrow.y) - Math.hypot(b.x - arrow.x, b.y - arrow.y))[0];
+    if (hit) {
+      damage(hit, arrow.damage, config);
+      events.push({ type: 'arrowHit', vesselId: hit.id });
+      if (hit.health === 0) events.push({ type: 'vesselSunk', vesselId: hit.id });
+      continue;
+    }
+    const flown = arrow.flown + distance;
+    if (flown < config.arrowRange) flying.push({ ...arrow, x: arrow.x + dx, y: arrow.y + dy, flown });
+  }
+  return flying;
+}
+
+/** Restarts the regen delay. At zero health the vessel starts sinking. */
+function damage(vessel: Vessel, amount: number, config: Config): void {
+  vessel.health = Math.max(0, vessel.health - amount);
+  vessel.regenDelayTicks = ticksFor(config.regenDelaySeconds);
+  if (vessel.health === 0) vessel.sinkingTicks = ticksFor(config.sinkingSeconds);
+}
+
+/** The closest a point comes to the path from the start by the step, px. */
+function distanceToSegment(point: Vector, start: Vector, dx: number, dy: number): number {
+  const along = clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx ** 2 + dy ** 2 || 1), 0, 1);
+  return Math.hypot(point.x - (start.x + dx * along), point.y - (start.y + dy * along));
+}
+
+/**
+ * Each Crew whose Volley is ready fires it at the closest vessel on the other side within Arrow range,
+ * aimed where that vessel is now. The Arrows fan out evenly around the aim.
+ */
+function fireVolleys(vessels: Vessel[], config: Config): Arrow[] {
+  const fired: Arrow[] = [];
+  for (const vessel of vessels) {
+    if (vessel.health === 0) continue;
+    if (vessel.volleyTicks > 0) vessel.volleyTicks--;
+    if (vessel.volleyTicks > 0) continue;
+    const target = vessels
+      .filter((other) => sideOf(other) !== sideOf(vessel) && other.health > 0)
+      .map((other) => ({ other, distance: Math.hypot(other.x - vessel.x, other.y - vessel.y) }))
+      .filter(({ distance }) => distance <= config.arrowRange)
+      .sort((a, b) => a.distance - b.distance)[0]?.other;
+    if (!target) continue;
+    const { volleySize, arrowDamage } = config.vesselClasses[vessel.vesselClass];
+    const aim = bearing(vessel.x, vessel.y, target.x, target.y);
+    for (let i = 0; i < volleySize; i++) {
+      const heading = aim + (i - (volleySize - 1) / 2) * config.volleySpread;
+      fired.push({ side: sideOf(vessel), x: vessel.x, y: vessel.y, heading, damage: arrowDamage, flown: 0 });
+    }
+    vessel.volleyTicks = ticksFor(config.volleySeconds);
+  }
+  return fired;
 }
 
 /** Counts down to the Wave and spawns it, or starts the next countdown once the Wave has no enemies left. */
@@ -209,7 +373,7 @@ function spawnWave(world: World): World {
   const { state, config } = world;
   const { player } = state;
   const random = seededRandom(world.random);
-  const radius = config.vesselClasses.smallDinghy.radius;
+  const radius = config.vesselClasses.enemyDinghy.radius;
   const [inner, outer] = [config.spawnInner * config.arenaRadius, config.spawnOuter * config.arenaRadius];
   const enemies: Vessel[] = [];
   let nextId = world.nextId;
@@ -223,7 +387,7 @@ function spawnWave(world: World): World {
       const y = -Math.cos(angle) * distance;
       if (Math.hypot(x - player.x, y - player.y) < config.minSpawnDistance) continue;
       if (enemies.some((enemy) => Math.hypot(x - enemy.x, y - enemy.y) < 2 * radius)) continue;
-      enemies.push(newVessel(nextId++, x, y, bearing(x, y, player.x, player.y)));
+      enemies.push(newVessel(nextId++, 'enemyDinghy', x, y, bearing(x, y, player.x, player.y), config));
       break;
     }
   }
@@ -237,7 +401,7 @@ function spawnWave(world: World): World {
 
 /**
  * The enemy AI. It only chooses commands, so enemies move by the same rules as the player vessel.
- * An enemy sails at the player vessel, circles it at about Arrow range once close, and steers back
+ * An enemy sails at the player vessel, circles it just inside Arrow range once close, and steers back
  * toward the centre when it is past enemyTurnBack, or would get there within one turning circle.
  */
 function enemyCommands(enemy: Vessel, player: Vessel, config: Config): Commands {
@@ -251,8 +415,8 @@ function enemyCommands(enemy: Vessel, player: Vessel, config: Config): Commands 
   }
 
   const toPlayer = bearing(enemy.x, enemy.y, player.x, player.y);
-  const range = Math.hypot(player.x - enemy.x, player.y - enemy.y) / config.arrowRange;
-  // Straight at the player vessel from 1.5x Arrow range, side-on at Arrow range, and turning away when closer.
+  const range = Math.hypot(player.x - enemy.x, player.y - enemy.y) / (config.arrowRange * config.enemyCircleRange);
+  // Straight at the player vessel from 1.5x the circling range, side-on at it, and turning away when closer.
   const offset = clamp((1.5 - range) * Math.PI, 0, (Math.PI * 3) / 4);
   // Circle the way the enemy already points, so it doesn't turn across the player vessel's bow.
   const side = angleBetween(toPlayer, enemy.heading) >= 0 ? 1 : -1;

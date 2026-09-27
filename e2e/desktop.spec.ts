@@ -95,6 +95,7 @@ test('there are no touch controls on desktop', async ({ page }) => {
 test('the HUD counts down to Wave 1, which then spawns', async ({ page }) => {
   await startRun(page);
   const countdown = page.getByTestId('countdown');
+  await expect(page.getByTestId('health')).toHaveText('Health 100');
 
   await expect(page.getByTestId('wave')).toHaveText('Wave 1');
   await expect(countdown).toHaveText(/^starts in [45]$/);
@@ -118,8 +119,8 @@ test('sailing over the Edge ends the Run, and a new Run resets the dinghy and th
   await expect(warning).toBeVisible();
   await expect(gameOver).toBeVisible({ timeout: 10_000 });
   await page.keyboard.up('KeyW');
-  await expect(gameOver).toContainText('The dinghy fell off the Edge');
-  expect((await page.evaluate(() => window.navalSkirmishTest!.state)).run).toBe('ended');
+  await expect(page.getByTestId('end-cause')).toHaveText('The dinghy fell off the Edge');
+  expect(await page.evaluate(() => window.navalSkirmishTest!.state)).toMatchObject({ run: 'ended', endCause: 'fell off the Edge' });
 
   await page.getByTestId('new-run').click();
 
@@ -129,4 +130,18 @@ test('sailing over the Edge ends the Run, and a new Run resets the dinghy and th
   expect(state).toMatchObject({ run: 'sailing', wave: 1, waveStatus: 'countdown', enemies: [] });
   await expect(page.getByTestId('countdown')).toBeVisible();
   expect(state.player).toMatchObject({ x: 0, y: 0, heading: 0, speed: 0, throttle: 0 });
+});
+
+test('a dinghy that sits still sinks under enemy Arrows, and the game-over screen says it sank', async ({ page }) => {
+  // The Wave arrives after 5 s, and three enemy Crews take about 7 s to sink a dinghy with 100 health.
+  test.setTimeout(90_000);
+  await startRun(page);
+  const health = page.getByTestId('health');
+
+  await expect(health).not.toHaveText('Health 100', { timeout: 30_000 });
+  await expect(page.getByTestId('game-over')).toBeVisible({ timeout: 60_000 });
+
+  await expect(page.getByTestId('end-cause')).toHaveText('The dinghy sank');
+  await expect(health).toHaveText('Health 0');
+  expect(await page.evaluate(() => window.navalSkirmishTest!.state)).toMatchObject({ run: 'ended', endCause: 'sank' });
 });

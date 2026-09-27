@@ -1,6 +1,17 @@
 import { Scene, type GameObjects, type Input, type Tweens } from 'phaser';
 import { defaultConfig } from '../core/config';
-import { createWorld, readState, step, TICK_SECONDS, type Commands, type Config, type Vessel, type World } from '../core/world';
+import {
+  createWorld,
+  readState,
+  step,
+  TICK_SECONDS,
+  type Arrow,
+  type Commands,
+  type Config,
+  type Vessel,
+  type World,
+  type WorldEvent,
+} from '../core/world';
 import { installTestHook } from './testHook';
 import { TouchControls } from './touchControls';
 
@@ -24,14 +35,41 @@ const ENEMY_DINGHY_SPRITES = ['enemyDinghy1', 'enemyDinghy2'];
 const ENEMY_MARK_COLOUR = 0xd62f2f;
 /** The ring is a little wider than the collision circle, so it shows around the hull. */
 const ENEMY_MARK_SCALE = 1.4;
+/** A dinghy below this share of its max health shows fire, since the pack has no damaged dinghy sprites. */
+const FIRE_BELOW = 0.4;
+/** Small enough that the hull shows around the flames. */
+const FIRE_SCALE = 0.6;
+const WRECK_TINT = 0x555555;
+const HIT_TINT = 0xff6060;
+const HIT_FLASH_MS = 100;
+const ARROW_LENGTH = 12;
+const ARROW_WIDTH = 2;
+const ARROW_COLOUR = 0x3b2a1a;
+const HEALTH_BAR_WIDTH = 40;
+const HEALTH_BAR_HEIGHT = 5;
+/** How far above an enemy's centre its health bar sits, px. */
+const HEALTH_BAR_OFFSET = 36;
+const HEALTH_BAR_COLOUR = 0x4caf50;
+const HEALTH_BAR_BACK_COLOUR = 0x2b0b0b;
+const END_CAUSE_TEXT = { sank: 'The dinghy sank', 'fell off the Edge': 'The dinghy fell off the Edge' };
+
+/** A vessel's hull and fire, which turn with it, inside a container that the fall and the wreck fade animate. */
+interface VesselSprite {
+  body: GameObjects.Container;
+  hull: GameObjects.Image;
+  fire: GameObjects.Image;
+  sinking: boolean;
+}
 
 type Keys = Record<'W' | 'A' | 'S' | 'D' | 'UP' | 'DOWN' | 'LEFT' | 'RIGHT', Input.Keyboard.Key>;
 
 export class GameScene extends Scene {
   private world!: World;
-  private dinghy!: GameObjects.Image;
+  private dinghy!: VesselSprite;
   /** Each enemy's sprite and mark, by vessel id. */
-  private enemies = new Map<number, GameObjects.Container>();
+  private enemies = new Map<number, VesselSprite>();
+  /** The Arrows and the enemies' health bars, drawn afresh each frame. */
+  private overlay!: GameObjects.Graphics;
   private keys!: Keys;
   private touch = new TouchControls();
   private accumulator = 0;
@@ -40,6 +78,8 @@ export class GameScene extends Scene {
   private gameOverScreen = document.getElementById('game-over')!;
   private waveLabel = document.getElementById('wave')!;
   private countdownLabel = document.getElementById('countdown')!;
+  private healthLabel = document.getElementById('health')!;
+  private endCauseLabel = document.getElementById('end-cause')!;
   /** False while a screen such as the start screen is showing, so the world doesn't tick. */
   private running = false;
 
@@ -53,16 +93,19 @@ export class GameScene extends Scene {
     this.load.image('enemyDinghy1', `${base}assets/dinghySmall2.png`);
     this.load.image('enemyDinghy2', `${base}assets/dinghySmall3.png`);
     this.load.image('water', `${base}assets/tile_73.png`);
+    this.load.image('fire', `${base}assets/fire1.png`);
   }
 
   create(): void {
     this.world = createWorld(Date.now(), defaultConfig);
     this.drawArena(defaultConfig);
     // Above the enemies, so the player's dinghy is never hidden under one.
-    this.dinghy = this.add.image(0, 0, 'dinghy').setScale(DINGHY_SCALE).setDepth(1);
-    this.cameras.main.startFollow(this.dinghy);
+    this.dinghy = this.addVesselSprite('dinghy');
+    this.dinghy.body.setDepth(1);
+    this.overlay = this.add.graphics().setDepth(2);
+    this.cameras.main.startFollow(this.dinghy.body);
     this.keys = this.input.keyboard!.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT') as Keys;
-    this.draw();
+    this.draw([]);
     installTestHook(() => readState(this.world));
     this.showStartScreen();
     document.getElementById('new-run')!.addEventListener('click', () => {
@@ -75,31 +118,28 @@ export class GameScene extends Scene {
     if (!this.running) return;
     this.accumulator += Math.min(deltaMs / 1000, MAX_FRAME_SECONDS);
     // Read only when a tick runs, so a lever move in a frame without a tick isn't lost.
+    // A frame can run several ticks, and each tick's events are only in the state until the next tick.
+    const events: WorldEvent[] = [];
     if (this.accumulator >= TICK_SECONDS) {
       const commands = this.readCommands();
       while (this.accumulator >= TICK_SECONDS) {
         this.world = step(this.world, commands);
+        events.push(...readState(this.world).events);
         this.accumulator -= TICK_SECONDS;
       }
     }
 
-    const { run, player } = readState(this.world);
+    const { run, player, endCause } = readState(this.world);
     this.edgeWarning.hidden = !player.pastPointOfNoReturn || run === 'ended';
     this.touch.showThrottle(player.throttle);
-    // Once the dinghy has crossed the Edge, the fall animation owns its scale, alpha and rotation.
-    if (!this.fall) this.draw();
+    // Once the dinghy has crossed the Edge or started sinking, that animation owns its scale, alpha and rotation.
+    if (!this.fall) this.draw(events);
     if (run !== 'sailing' && !this.fall) {
-      this.fall = this.tweens.add({
-        targets: this.dinghy,
-        scale: 0,
-        alpha: 0,
-        angle: '+=720',
-        duration: defaultConfig.fallSeconds * 1000,
-        ease: 'Quad.easeIn',
-      });
+      this.fall = run === 'sinking' ? this.sink(this.dinghy) : this.fallOffEdge(this.dinghy);
     }
     if (run === 'ended') {
       this.running = false;
+      if (endCause) setText(this.endCauseLabel, END_CAUSE_TEXT[endCause]);
       this.gameOverScreen.hidden = false;
     }
   }
@@ -112,10 +152,12 @@ export class GameScene extends Scene {
     this.touch.showThrottle(0);
     this.fall?.remove();
     this.fall = undefined;
-    this.dinghy.setScale(DINGHY_SCALE).setAlpha(1);
-    for (const enemy of this.enemies.values()) enemy.destroy();
+    this.dinghy.body.setScale(1).setAlpha(1);
+    this.dinghy.hull.clearTint();
+    this.dinghy.sinking = false;
+    for (const enemy of this.enemies.values()) enemy.body.destroy();
     this.enemies.clear();
-    this.draw();
+    this.draw([]);
     this.running = true;
   }
 
@@ -184,42 +226,106 @@ export class GameScene extends Scene {
     strokeRing(space, radius);
   }
 
-  private draw(): void {
-    const { player, enemies, wave, waveStatus, countdown } = readState(this.world);
-    this.dinghy.setPosition(player.x, player.y).setRotation(player.heading + SPRITE_ROTATION);
-    this.drawEnemies(enemies);
+  private draw(events: WorldEvent[]): void {
+    const { player, enemies, arrows, wave, waveStatus, countdown } = readState(this.world);
+    this.drawVessel(this.dinghy, player);
+    this.overlay.clear();
+    this.drawEnemies(enemies, events);
+    this.drawArrows(arrows);
+    for (const event of events) {
+      if (event.type === 'arrowHit') this.flashHit(event.vesselId === player.id ? this.dinghy : this.enemies.get(event.vesselId));
+    }
     setText(this.waveLabel, `Wave ${wave}`);
     this.countdownLabel.hidden = waveStatus !== 'countdown';
     setText(this.countdownLabel, `starts in ${Math.ceil(countdown)}`);
+    setText(this.healthLabel, `Health ${Math.ceil(player.health)}`);
   }
 
-  /** Adds a sprite for each new enemy, and plays the fall for each enemy lost over the Edge. */
-  private drawEnemies(enemies: Vessel[]): void {
-    const afloat = new Set(enemies.map((enemy) => enemy.id));
+  /**
+   * Adds a sprite for each new enemy, starts the wreck fade for each enemy that sank, plays the fall for
+   * each enemy lost over the Edge, and drops the sprite of each wreck that has finished sinking.
+   */
+  private drawEnemies(enemies: Vessel[], events: WorldEvent[]): void {
+    for (const event of events) {
+      const sprite = this.enemies.get(event.vesselId);
+      if (!sprite) continue;
+      if (event.type === 'vesselSunk') this.sink(sprite);
+      if (event.type === 'vesselOverEdge') {
+        this.enemies.delete(event.vesselId);
+        this.fallOffEdge(sprite).once('complete', () => sprite.body.destroy());
+      }
+    }
+    const present = new Set(enemies.map((enemy) => enemy.id));
     for (const [id, sprite] of this.enemies) {
-      if (afloat.has(id)) continue;
+      if (present.has(id)) continue;
       this.enemies.delete(id);
-      this.tweens.add({
-        targets: sprite,
-        scale: 0,
-        alpha: 0,
-        angle: '+=720',
-        duration: defaultConfig.fallSeconds * 1000,
-        ease: 'Quad.easeIn',
-        onComplete: () => sprite.destroy(),
-      });
+      sprite.body.destroy();
     }
     for (const enemy of enemies) {
       let sprite = this.enemies.get(enemy.id);
       if (!sprite) {
+        sprite = this.addVesselSprite(ENEMY_DINGHY_SPRITES[enemy.id % ENEMY_DINGHY_SPRITES.length]);
         const radius = defaultConfig.vesselClasses[enemy.vesselClass].radius * ENEMY_MARK_SCALE;
-        const mark = this.add.circle(0, 0, radius, ENEMY_MARK_COLOUR, 0.35).setStrokeStyle(3, ENEMY_MARK_COLOUR);
-        const hull = this.add.image(0, 0, ENEMY_DINGHY_SPRITES[enemy.id % ENEMY_DINGHY_SPRITES.length]).setScale(DINGHY_SCALE);
-        sprite = this.add.container(0, 0, [mark, hull]);
+        sprite.body.addAt(this.add.circle(0, 0, radius, ENEMY_MARK_COLOUR, 0.35).setStrokeStyle(3, ENEMY_MARK_COLOUR), 0);
         this.enemies.set(enemy.id, sprite);
       }
-      sprite.setPosition(enemy.x, enemy.y).setRotation(enemy.heading + SPRITE_ROTATION);
+      this.drawVessel(sprite, enemy);
+      if (enemy.health > 0) this.drawHealthBar(enemy);
     }
+  }
+
+  private addVesselSprite(texture: string): VesselSprite {
+    const hull = this.add.image(0, 0, texture).setScale(DINGHY_SCALE);
+    const fire = this.add.image(0, 0, 'fire').setScale(FIRE_SCALE).setVisible(false);
+    return { body: this.add.container(0, 0, [hull, fire]), hull, fire, sinking: false };
+  }
+
+  private drawVessel(sprite: VesselSprite, vessel: Vessel): void {
+    sprite.body.setPosition(vessel.x, vessel.y).setRotation(vessel.heading + SPRITE_ROTATION);
+    // The flames stay upright on the screen as the hull turns.
+    sprite.fire.setVisible(vessel.health < vessel.maxHealth * FIRE_BELOW).setRotation(-sprite.body.rotation);
+  }
+
+  private drawHealthBar({ x, y, health, maxHealth }: Vessel): void {
+    const left = x - HEALTH_BAR_WIDTH / 2;
+    const top = y - HEALTH_BAR_OFFSET;
+    this.overlay.fillStyle(HEALTH_BAR_BACK_COLOUR, 0.8).fillRect(left, top, HEALTH_BAR_WIDTH, HEALTH_BAR_HEIGHT);
+    this.overlay.fillStyle(HEALTH_BAR_COLOUR).fillRect(left, top, (HEALTH_BAR_WIDTH * health) / maxHealth, HEALTH_BAR_HEIGHT);
+  }
+
+  /** Each Arrow is a short line ending at its point. */
+  private drawArrows(arrows: Arrow[]): void {
+    this.overlay.lineStyle(ARROW_WIDTH, ARROW_COLOUR);
+    for (const { x, y, heading } of arrows) {
+      this.overlay.lineBetween(x - Math.sin(heading) * ARROW_LENGTH, y + Math.cos(heading) * ARROW_LENGTH, x, y);
+    }
+  }
+
+  private flashHit(sprite: VesselSprite | undefined): void {
+    if (!sprite || sprite.sinking) return;
+    sprite.hull.setTint(HIT_TINT);
+    this.time.delayedCall(HIT_FLASH_MS, () => {
+      if (!sprite.sinking && sprite.hull.active) sprite.hull.clearTint();
+    });
+  }
+
+  /** The wreck: a dark, burning hull that fades out over the sinking time. */
+  private sink(sprite: VesselSprite): Tweens.Tween {
+    sprite.sinking = true;
+    sprite.hull.setTint(WRECK_TINT);
+    sprite.fire.setVisible(true);
+    return this.tweens.add({ targets: sprite.body, alpha: 0, duration: defaultConfig.sinkingSeconds * 1000 });
+  }
+
+  private fallOffEdge(sprite: VesselSprite): Tweens.Tween {
+    return this.tweens.add({
+      targets: sprite.body,
+      scale: 0,
+      alpha: 0,
+      angle: '+=720',
+      duration: defaultConfig.fallSeconds * 1000,
+      ease: 'Quad.easeIn',
+    });
   }
 }
 

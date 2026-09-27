@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { defaultConfig } from './config';
-import { createWorld, readState, step, type Commands, type Config, type World, type WorldState } from './world';
+import {
+  createWorld,
+  readState,
+  step,
+  type Commands,
+  type Config,
+  type VesselClass,
+  type World,
+  type WorldState,
+} from './world';
 
 /**
  * Round numbers so expectations are easy to work out by hand at 60 ticks per second.
@@ -13,15 +22,25 @@ const config: Config = {
   rimCurrentStart: 0.8,
   pointOfNoReturn: 0.95,
   fallSeconds: 0.5,
+  sinkingSeconds: 1.5,
   waveCountdownSeconds: 1000,
   waveSizeBase: 2,
   spawnInner: 0.4,
   spawnOuter: 0.75,
   minSpawnDistance: 500,
   arrowRange: 350,
+  arrowSpeed: 400,
+  volleySeconds: 1,
+  volleySpread: 0.1,
+  regenRate: 0.01,
+  regenDelaySeconds: 3,
+  enemyCircleRange: 0.9,
   enemyTurnBack: 0.75,
   enemyCruiseThrottle: 0.6,
-  vesselClasses: { smallDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20 } },
+  vesselClasses: {
+    smallDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 100, volleySize: 1, arrowDamage: 5 },
+    enemyDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 30, volleySize: 1, arrowDamage: 5 },
+  },
 };
 const noCommands: Commands = { throttleUp: false, throttleDown: false, rudder: 0 };
 const up: Commands = { ...noCommands, throttleUp: true };
@@ -214,7 +233,10 @@ describe('Rim current', () => {
     ...config,
     arenaRadius: 1000,
     throttleRate: 60,
-    vesselClasses: { smallDinghy: { ...config.vesselClasses.smallDinghy, acceleration: 120 * 60, turnRate: Math.PI * 60 } },
+    vesselClasses: {
+      ...config.vesselClasses,
+      smallDinghy: { ...config.vesselClasses.smallDinghy, acceleration: 120 * 60, turnRate: Math.PI * 60 },
+    },
   };
   const turnAround: Commands = { ...up, rudder: 1 };
   const distance = (world: World) => Math.hypot(readState(world).player.x, readState(world).player.y);
@@ -278,15 +300,21 @@ describe('the Run', () => {
     ...config,
     arenaRadius: 100,
     throttleRate: 60,
-    vesselClasses: { smallDinghy: { ...config.vesselClasses.smallDinghy, topSpeed: 1200, acceleration: 1200 * 60 } },
+    vesselClasses: {
+      ...config.vesselClasses,
+      smallDinghy: { ...config.vesselClasses.smallDinghy, topSpeed: 1200, acceleration: 1200 * 60 },
+    },
   };
 
   it('goes from sailing to falling to ended once the dinghy crosses the Edge, and stays ended', () => {
     let world = createWorld(1, quick);
+    expect(readState(world).endCause).toBeNull();
     while (readState(world).run === 'sailing') world = step(world, up);
     const fell = readState(world);
 
     expect(fell.run).toBe('falling');
+    expect(fell.endCause).toBe('fell off the Edge');
+    expect(fell.events).toContainEqual({ type: 'vesselOverEdge', vesselId: fell.player.id });
     expect(Math.hypot(fell.player.x, fell.player.y)).toBeGreaterThanOrEqual(100);
     // fallSeconds is 0.5 s, which is 30 ticks.
     expect(readState(run(world, up, 29)).run).toBe('falling');
@@ -321,6 +349,15 @@ function untilSpawned(world: World, commands: Commands = noCommands): World {
 }
 
 const untilNoEnemies = (world: World) => until(world, (state) => state.enemies.length === 0);
+
+/** The default config with Arrows that do no damage, so a test about sailing never sinks a vessel. */
+const harmless: Config = {
+  ...defaultConfig,
+  vesselClasses: {
+    smallDinghy: { ...defaultConfig.vesselClasses.smallDinghy, arrowDamage: 0 },
+    enemyDinghy: { ...defaultConfig.vesselClasses.enemyDinghy, arrowDamage: 0 },
+  },
+};
 
 describe('Waves', () => {
   /** The default Arena, with a 1 s countdown. */
@@ -415,9 +452,9 @@ describe('Waves', () => {
 });
 
 describe('enemy AI', () => {
-  const waves: Config = { ...defaultConfig, waveCountdownSeconds: 1 };
+  const waves: Config = { ...harmless, waveCountdownSeconds: 1 };
 
-  it('closes in on the player, then circles at about Arrow range', () => {
+  it('closes in on the player, then circles just inside Arrow range', () => {
     for (let seed = 1; seed <= 5; seed++) {
       const spawned = untilSpawned(createWorld(seed, waves));
       const later = run(spawned, noCommands, 60 * 30);
@@ -426,8 +463,9 @@ describe('enemy AI', () => {
       expect(enemies).toHaveLength(3);
       for (const [i, enemy] of enemies.entries()) {
         expect(distanceBetween(enemy, player)).toBeLessThan(distanceBetween(readState(spawned).enemies[i], player));
-        expect(distanceBetween(enemy, player)).toBeGreaterThan(0.85 * 350);
-        expect(distanceBetween(enemy, player)).toBeLessThan(1.15 * 350);
+        // enemyCircleRange is 0.9, so about 315 px.
+        expect(distanceBetween(enemy, player)).toBeGreaterThan(0.8 * 350);
+        expect(distanceBetween(enemy, player)).toBeLessThan(350);
       }
       // Still circling, not parked.
       expect(distanceBetween(readState(run(later, noCommands, 60)).enemies[0], enemies[0])).toBeGreaterThan(30);
@@ -460,12 +498,13 @@ describe('enemy AI', () => {
 
     expect(touched).toBe(true);
     expect(readState(world)).toMatchObject({ enemies: [], wave: 2, waveStatus: 'countdown' });
+    expect(readState(world).events).toContainEqual({ type: 'vesselOverEdge', vesselId: 1 });
   });
 });
 
 describe('contact', () => {
   it('pushes two touching vessels apart so they never overlap', () => {
-    const homing: Config = { ...defaultConfig, waveCountdownSeconds: 1, waveSizeBase: 0, enemyTurnBack: 0 };
+    const homing: Config = { ...harmless, waveCountdownSeconds: 1, waveSizeBase: 0, enemyTurnBack: 0 };
     let world = untilSpawned(createWorld(2, homing));
     let closest = Infinity;
     for (let tick = 0; tick < 60 * 20; tick++) {
@@ -481,7 +520,7 @@ describe('contact', () => {
   });
 
   it('keeps a crowd of circling enemies and the player from overlapping', () => {
-    const crowd: Config = { ...defaultConfig, waveCountdownSeconds: 1, waveSizeBase: 12 };
+    const crowd: Config = { ...harmless, waveCountdownSeconds: 1, waveSizeBase: 12 };
     let world = untilSpawned(createWorld(3, crowd));
     for (let tick = 0; tick < 60 * 30; tick++) {
       world = step(world, { ...noCommands, rudder: 0.3, setThrottle: 1 });
@@ -504,5 +543,203 @@ describe('determinism over a full Wave', () => {
 
     expect(play().enemies).toHaveLength(3);
     expect(play()).toEqual(play());
+  });
+});
+
+/** Changes some stats of the player's class and of the enemy class. */
+function withClasses(base: Config, player: Partial<VesselClass>, enemy: Partial<VesselClass>): Config {
+  return {
+    ...base,
+    vesselClasses: {
+      smallDinghy: { ...base.vesselClasses.smallDinghy, ...player },
+      enemyDinghy: { ...base.vesselClasses.enemyDinghy, ...enemy },
+    },
+  };
+}
+
+/**
+ * One enemy per Wave from Wave 1, that never rows. Every spawn point is within Arrow range of the
+ * player vessel at the centre, and the Waves are 1 s apart.
+ */
+const still: Config = {
+  ...defaultConfig,
+  waveCountdownSeconds: 1,
+  waveSizeBase: 0,
+  enemyTurnBack: 0,
+  enemyCruiseThrottle: 0,
+  arrowRange: 1200,
+};
+
+/** The turn from one heading to another, between -PI and PI. */
+const turnBetween = (from: number, to: number) => Math.atan2(Math.sin(to - from), Math.cos(to - from));
+const bearingTo = (from: { x: number; y: number }, to: { x: number; y: number }) => Math.atan2(to.x - from.x, from.y - to.y);
+const arrowsOf = (state: WorldState, side: 'player' | 'enemy') => state.arrows.filter((arrow) => arrow.side === side);
+
+describe('Arrows', () => {
+  it('fire in a Volley on the Crew timer, at the closest vessel on the other side', () => {
+    // Two enemies, and Arrows so slow that none lands during the test.
+    const slow: Config = { ...still, waveSizeBase: 1, arrowSpeed: 10 };
+    const fired = step(untilSpawned(createWorld(1, slow)), noCommands);
+    const { player, enemies, arrows } = readState(fired);
+    const closest = [...enemies].sort((a, b) => distanceBetween(a, player) - distanceBetween(b, player))[0];
+
+    expect(arrows).toHaveLength(3);
+    const [playerArrow] = arrowsOf(readState(fired), 'player');
+    expect(turnBetween(playerArrow.heading, bearingTo(player, closest))).toBeCloseTo(0);
+    for (const enemy of enemies) {
+      const arrow = arrowsOf(readState(fired), 'enemy').find(({ x, y }) => x === enemy.x && y === enemy.y)!;
+      expect(turnBetween(arrow.heading, bearingTo(enemy, player))).toBeCloseTo(0);
+    }
+    // volleySeconds is 1 s, which is 60 ticks.
+    expect(readState(run(fired, noCommands, 59)).arrows).toHaveLength(3);
+    expect(readState(run(fired, noCommands, 60)).arrows).toHaveLength(6);
+  });
+
+  it('are never fired at a vessel out of range, nor at a vessel on the same side', () => {
+    // Every enemy spawns at least 600 px from the player, and the crowd has neighbours closer than 500 px.
+    const short: Config = { ...still, waveSizeBase: 20, arrowRange: 500 };
+    let world = untilSpawned(createWorld(1, short));
+    const { enemies } = readState(world);
+    expect(enemies.some((a) => enemies.some((b) => a !== b && distanceBetween(a, b) < 500))).toBe(true);
+
+    for (let tick = 0; tick < 60 * 5; tick++) {
+      world = step(world, noCommands);
+      expect(readState(world).arrows).toEqual([]);
+    }
+  });
+
+  it("match the class's Volley size and Arrow damage, and fan out around the aim", () => {
+    const volleys = withClasses({ ...still, volleySeconds: 100 }, { volleySize: 3, arrowDamage: 7 }, { health: 100, arrowDamage: 0 });
+    const fired = step(untilSpawned(createWorld(1, volleys)), noCommands);
+    const { player, enemies } = readState(fired);
+    const aim = bearingTo(player, enemies[0]);
+    const headings = arrowsOf(readState(fired), 'player').map((arrow) => turnBetween(aim, arrow.heading));
+
+    expect(headings.map((turn) => turn.toFixed(3))).toEqual(['-0.100', '0.000', '0.100']);
+    expect(arrowsOf(readState(fired), 'player').map((arrow) => arrow.damage)).toEqual([7, 7, 7]);
+    // At 600 px or more, only the middle Arrow reaches the enemy.
+    const hit = until(fired, (state) => state.enemies[0].health < 100);
+    expect(readState(hit).enemies[0].health).toBe(93);
+    expect(readState(hit).events).toContainEqual({ type: 'arrowHit', vesselId: enemies[0].id });
+    expect(arrowsOf(readState(hit), 'player')).toHaveLength(2);
+  });
+
+  it('are removed once they have flown the Arrow range', () => {
+    const volleys = withClasses({ ...still, volleySeconds: 100 }, { volleySize: 3 }, { health: 100, arrowDamage: 0 });
+    const fired = step(untilSpawned(createWorld(1, volleys)), noCommands);
+    // 1200 px at 400 px/s is 3 s, which is 180 ticks. The two outer Arrows miss.
+    const nearlyThere = readState(run(fired, noCommands, 178));
+
+    expect(arrowsOf(nearlyThere, 'player')).toHaveLength(2);
+    for (const arrow of arrowsOf(nearlyThere, 'player')) expect(distanceFromCentre(arrow)).toBeLessThanOrEqual(1200);
+    expect(readState(run(fired, noCommands, 181)).arrows).toEqual([]);
+  });
+
+  it('miss a vessel that moves away after they are fired, and hit one that stays', () => {
+    // One Volley only, and a player that turns on the spot and is at top speed in one tick.
+    const dodging = withClasses(
+      { ...still, volleySeconds: 100, throttleRate: 60 },
+      { topSpeed: 300, acceleration: 300 * 60, turnRate: Math.PI * 60, arrowDamage: 0 },
+      { arrowDamage: 10 },
+    );
+    const fired = step(untilSpawned(createWorld(1, dodging)), noCommands);
+    const [arrow] = arrowsOf(readState(fired), 'enemy');
+    const noEnemyArrows = (state: WorldState) => arrowsOf(state, 'enemy').length === 0;
+
+    const stayed = until(fired, noEnemyArrows);
+    const dodged = until(fired, noEnemyArrows, (world) => steerTo(world, arrow.heading + Math.PI / 2, 1));
+
+    expect(readState(stayed).player.health).toBe(90);
+    expect(readState(dodged).player.health).toBe(100);
+    expect(distanceFromCentre(readState(dodged).player)).toBeGreaterThan(300);
+  });
+});
+
+describe('sinking', () => {
+  it('sinks a vessel at zero health, which stops shooting and taking hits, and is removed after the sinking time', () => {
+    const fragile = withClasses(still, { arrowDamage: 10 }, { health: 10, arrowDamage: 0 });
+    const sunk = until(untilSpawned(createWorld(1, fragile)), (state) => state.enemies[0].health === 0);
+    const [wreck] = readState(sunk).enemies;
+
+    expect(readState(sunk).events).toContainEqual({ type: 'arrowHit', vesselId: wreck.id });
+    expect(readState(sunk).events).toContainEqual({ type: 'vesselSunk', vesselId: wreck.id });
+    // sinkingSeconds is 1.5 s, which is 90 ticks.
+    let world = sunk;
+    for (let tick = 1; tick < 90; tick++) {
+      const before = readState(world);
+      world = step(world, noCommands);
+      const state = readState(world);
+      // Arrows already in flight fly on, through the wreck, but no new ones are fired.
+      expect(state.events.filter((event) => event.vesselId === wreck.id)).toEqual([]);
+      expect(arrowsOf(state, 'player').length).toBeLessThanOrEqual(arrowsOf(before, 'player').length);
+      expect(arrowsOf(state, 'enemy').length).toBeLessThanOrEqual(arrowsOf(before, 'enemy').length);
+      expect(state.enemies).toEqual([{ ...wreck, sinkingTicks: wreck.sinkingTicks - tick }]);
+      expect(state.waveStatus).toBe('fighting');
+    }
+    expect(readState(step(world, noCommands))).toMatchObject({ enemies: [], wave: 2, waveStatus: 'countdown' });
+  });
+
+  it('ends the Run with the cause "sank" when the player vessel sinks', () => {
+    const fragile = withClasses(still, { health: 10, arrowDamage: 0 }, { arrowDamage: 10 });
+    const sunk = until(untilSpawned(createWorld(1, fragile)), (state) => state.run !== 'sailing');
+
+    expect(readState(sunk)).toMatchObject({ run: 'sinking', endCause: 'sank', player: { health: 0 } });
+    expect(readState(sunk).events).toContainEqual({ type: 'vesselSunk', vesselId: 0 });
+    expect(readState(run(sunk, noCommands, 89))).toMatchObject({ run: 'sinking', events: [] });
+    expect(readState(run(sunk, noCommands, 90))).toMatchObject({ run: 'ended', endCause: 'sank' });
+  });
+});
+
+describe('regen', () => {
+  // A Volley every 3 s from a tough enemy, which lands on the still player vessel every 3 s.
+  const regen: Config = withClasses(
+    { ...still, volleySeconds: 3, regenDelaySeconds: 1, regenRate: 0.02 },
+    { arrowDamage: 5 },
+    { health: 1000, arrowDamage: 5 },
+  );
+  const firstHit = (config: Config) => until(untilSpawned(createWorld(1, config)), (state) => state.player.health < 100);
+
+  it('starts only after the delay, runs at the configured rate, and restarts its delay on a new hit', () => {
+    const hit = firstHit(regen);
+    const health = (ticks: number) => readState(run(hit, noCommands, ticks)).player.health;
+
+    expect(readState(hit).player.health).toBe(95);
+    // The delay is 1 s, which is 60 ticks. Then 2% of 100 health a second.
+    expect(health(60)).toBe(95);
+    expect(health(61)).toBeCloseTo(95 + 2 / 60);
+    expect(health(120)).toBeCloseTo(97);
+    expect(health(179)).toBeCloseTo(95 + (2 * 119) / 60);
+    // The next Volley lands 3 s after the first.
+    expect(health(180)).toBeCloseTo(94);
+    expect(health(240)).toBeCloseTo(94);
+    expect(health(241)).toBeCloseTo(94 + 2 / 60);
+  });
+
+  it('never goes above max health', () => {
+    const fast = { ...regen, regenRate: 1 };
+    const hit = firstHit(fast);
+
+    expect(readState(run(hit, noCommands, 70)).player.health).toBe(100);
+    expect(readState(run(hit, noCommands, 179)).player.health).toBe(100);
+  });
+
+  it('never heals an enemy', () => {
+    const hit = firstHit(regen);
+
+    expect(readState(hit).enemies[0].health).toBe(995);
+    expect(readState(run(hit, noCommands, 179)).enemies[0].health).toBe(995);
+  });
+});
+
+describe('health between Waves', () => {
+  it('carries over from one Wave to the next', () => {
+    // One Volley each, and the player's sinks the enemy.
+    const lasting = withClasses({ ...still, volleySeconds: 100, regenRate: 0, sinkingSeconds: 0.5 }, { arrowDamage: 5 }, { health: 5, arrowDamage: 20 });
+    const hit = until(untilSpawned(createWorld(1, lasting)), (state) => state.player.health < 100);
+    const nextWave = until(hit, (state) => state.wave === 2 && state.waveStatus === 'fighting');
+
+    expect(readState(hit).player.health).toBe(80);
+    expect(readState(nextWave).player.health).toBe(80);
+    expect(readState(nextWave).enemies.map((enemy) => enemy.health)).toEqual([5, 5]);
   });
 });
