@@ -28,3 +28,27 @@ test('every asset loads', async ({ page }) => {
 
   expect(failed).toEqual([]);
 });
+
+for (const [name, throttleKey, rightKey] of [
+  ['WASD', 'KeyW', 'KeyD'],
+  ['arrow keys', 'ArrowUp', 'ArrowRight'],
+] as const) {
+  test(`holding throttle then right with the ${name} moves and turns the Dinghy`, async ({ page }) => {
+    await page.goto('?test');
+    await page.waitForFunction(() => window.navalSkirmishTest !== undefined);
+
+    await page.keyboard.down(throttleKey);
+    await page.waitForTimeout(500);
+    await page.keyboard.up(throttleKey);
+    const afterThrottle = await page.evaluate(() => window.navalSkirmishTest!.state.dinghy);
+    await page.keyboard.down(rightKey);
+    await page.waitForTimeout(500);
+    await page.keyboard.up(rightKey);
+    const afterTurn = await page.evaluate(() => window.navalSkirmishTest!.state.dinghy);
+
+    expect(afterThrottle.throttle).toBeGreaterThan(0);
+    expect(afterThrottle.y).toBeLessThan(0);
+    expect(afterTurn.heading).toBeGreaterThan(0);
+    expect(afterTurn.throttle).toBe(afterThrottle.throttle);
+  });
+}

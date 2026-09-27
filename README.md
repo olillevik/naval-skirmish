@@ -2,7 +2,7 @@
 
 A top-down browser game about steering a small Dinghy across a round magical sea that ends in open space. The latest build of `main` is live at <https://olillevik.github.io/naval-skirmish/>.
 
-Right now the game is a walking skeleton. The Dinghy sits still in the middle of the Arena and there is nothing to do yet. Keyboard and phone controls are coming in the next milestones.
+Right now you can sail the Dinghy around the Arena with the keyboard. W or ↑ raises the throttle, S or ↓ lowers it, and A/D or ←/→ turn. The throttle stays where you leave it. Nothing happens at the Edge yet, and phone controls are still to come.
 
 ## Run it
 
