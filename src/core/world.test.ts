@@ -43,6 +43,8 @@ const config: Config = {
   enemyCircleRange: 0.9,
   enemyTurnBack: 0.75,
   enemyCruiseThrottle: 0.6,
+  rammingDamage: 10,
+  rammingSpeed: 240,
   vesselClasses: {
     smallDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 100, volleySize: 1, arrowDamage: 5, gold: 0 },
     enemyDinghy: { topSpeed: 120, acceleration: 30, turnRate: Math.PI / 2, radius: 20, health: 30, volleySize: 1, arrowDamage: 5, gold: 5 },
@@ -360,9 +362,10 @@ function untilSpawned(world: World, commands: Commands = noCommands): World {
 
 const untilNoEnemies = (world: World) => until(world, (state) => state.enemies.length === 0);
 
-/** The default config with Arrows that do no damage, so a test about sailing never sinks a vessel. */
+/** The default config with Arrows and ramming that do no damage, so a test about sailing never sinks a vessel. */
 const harmless: Config = {
   ...defaultConfig,
+  rammingDamage: 0,
   vesselClasses: {
     smallDinghy: { ...defaultConfig.vesselClasses.smallDinghy, arrowDamage: 0 },
     enemyDinghy: { ...defaultConfig.vesselClasses.enemyDinghy, arrowDamage: 0 },
@@ -907,5 +910,105 @@ describe('Gold and the Score', () => {
     expect(readState(sunk).events).toContainEqual({ type: 'vesselSunk', vesselId: readState(sunk).enemies[0].id });
     expect(goldOf(readState(sunk))).toEqual([]);
     expect(readState(ended)).toMatchObject({ run: 'ended', gold: 0, score: 0, wave: 1 });
+  });
+});
+
+describe('ramming', () => {
+  /**
+   * The player vessel sails at the one still enemy. Each Crew fires one Volley, as the Wave spawns, and its
+   * Arrows do no damage.
+   */
+  const target = withClasses({ ...still, volleySeconds: 1000 }, { arrowDamage: 0 }, { health: 1000, arrowDamage: 0 });
+  const chase = (throttle: number) => (world: World) => {
+    const { player, enemies } = readState(world);
+    return steerTo(world, bearingTo(player, enemies[0]), throttle);
+  };
+  const rammedIn = (state: WorldState) => state.events.filter((event) => event.type === 'rammed').map((event) => event.vesselId);
+  /** Runs until the first ram, and returns the world on that tick and the damage each vessel took. */
+  const firstRam = (config: Config, throttle = 1) => {
+    const spawned = untilSpawned(createWorld(1, config));
+    const world = until(spawned, (state) => rammedIn(state).length > 0, chase(throttle));
+    const [before, after] = [readState(spawned), readState(world)];
+    return { world, player: before.player.health - after.player.health, enemy: before.enemies[0].health - after.enemies[0].health };
+  };
+
+  it('damages both vessels when the player vessel and an enemy touch, more at a higher closing speed', () => {
+    const full = firstRam(target);
+    const half = firstRam(target, 0.5);
+
+    expect(rammedIn(readState(full.world))).toEqual([0, 1]);
+    // Full speed into a still dinghy closes at 150 px/s, half of the 300 px/s that does 10 damage.
+    expect(full.player).toBeCloseTo(5, 0);
+    expect(full.enemy).toBeCloseTo(full.player);
+    expect(half.player).toBeCloseTo(2.5, 0);
+    expect(half.enemy).toBeCloseTo(half.player);
+  });
+
+  it('does less damage to the bigger vessel', () => {
+    const big = firstRam(withClasses(target, { radius: 40 }, {}));
+    const small = firstRam(withClasses(target, {}, { radius: 40 }));
+
+    // A vessel twice the other's size takes half the damage the other takes.
+    expect(big.enemy).toBeCloseTo(2 * big.player);
+    expect(small.player).toBeCloseTo(2 * small.enemy);
+  });
+
+  it('hurts only when a contact starts, not while one vessel keeps pushing the other', () => {
+    const { world } = firstRam(target);
+    let pushing = world;
+    for (let tick = 0; tick < 60 * 3; tick++) {
+      pushing = step(pushing, chase(1)(pushing));
+      expect(distanceBetween(readState(pushing).player, readState(pushing).enemies[0])).toBeLessThan(40.01);
+      expect(rammedIn(readState(pushing))).toEqual([]);
+    }
+  });
+
+  it('restarts the regen delay', () => {
+    const { world } = firstRam({ ...target, regenRate: 0.1 });
+    const health = (ticks: number) => readState(run(world, noCommands, ticks)).player.health;
+
+    // The delay is 3 s, which is 180 ticks.
+    expect(health(180)).toBe(readState(world).player.health);
+    expect(health(181)).toBeGreaterThan(readState(world).player.health);
+  });
+
+  it('sinks an enemy rammed to zero health, which credits Gold', () => {
+    const { world } = firstRam(withClasses(target, {}, { health: 1 }));
+
+    expect(readState(world).enemies[0].health).toBe(0);
+    expect(readState(world).events).toContainEqual({ type: 'vesselSunk', vesselId: 1 });
+    expect(readState(world).events).toContainEqual({ type: 'goldCredited', vesselId: 1, gold: 5 });
+  });
+
+  it('sinks the player vessel rammed to zero health, which ends the Run', () => {
+    const { world } = firstRam(withClasses(target, { health: 1 }, {}));
+
+    expect(readState(world)).toMatchObject({ run: 'sinking', endCause: 'sank', player: { health: 0 } });
+    expect(readState(world).events).toContainEqual({ type: 'vesselSunk', vesselId: 0 });
+  });
+
+  it('never hurts two enemies that touch, which only push apart', () => {
+    // Every enemy heads for the centre at full throttle, and the player vessel has sailed well clear of it.
+    const pileUp = withClasses(
+      { ...defaultConfig, waveSizeBase: 8, enemyTurnBack: 0, enemyCruiseThrottle: 1 },
+      { arrowDamage: 0 },
+      { arrowDamage: 0 },
+    );
+    let world = untilSpawned(createWorld(1, pileUp), up);
+    let touched = false;
+    for (let tick = 0; tick < 60 * 15; tick++) {
+      world = step(world, { ...noCommands, setThrottle: 0 });
+      const { player, enemies } = readState(world);
+      for (const [i, a] of enemies.entries()) {
+        expect(distanceBetween(a, player)).toBeGreaterThan(40);
+        expect(a.health).toBe(a.maxHealth);
+        for (const b of enemies.slice(i + 1)) {
+          expect(distanceBetween(a, b)).toBeGreaterThan(40 - 0.001);
+          if (distanceBetween(a, b) < 40.01) touched = true;
+        }
+      }
+    }
+
+    expect(touched).toBe(true);
   });
 });

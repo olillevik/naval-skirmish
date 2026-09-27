@@ -28,6 +28,9 @@ export const defaultConfig: Config = {
   enemyCircleRange: 0.9,
   enemyTurnBack: 0.75,
   enemyCruiseThrottle: 0.6,
+  // Two small dinghies meeting head-on at full speed close at 300 px/s.
+  rammingDamage: 10,
+  rammingSpeed: 300,
   vesselClasses: {
     // The sprite is 16 x 26 px, drawn at 2x.
     smallDinghy: { topSpeed: 150, acceleration: 100, turnRate: Math.PI / 2, radius: 20, health: 100, volleySize: 1, arrowDamage: 5, gold: 0 },

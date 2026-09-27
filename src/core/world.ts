@@ -61,6 +61,14 @@ export interface Config {
    * Below full, so the player vessel can catch an enemy and push it toward the Edge.
    */
   enemyCruiseThrottle: number;
+  /**
+   * Health each of two vessels of the same size takes when they start touching at a closing speed of
+   * rammingSpeed. Damage grows in proportion to the closing speed, and each vessel's share scales with
+   * the other vessel's share of the two radii, so a bigger vessel takes less. Enemies never hurt each other.
+   */
+  rammingDamage: number;
+  /** px/s. */
+  rammingSpeed: number;
   vesselClasses: Record<VesselClassName, VesselClass>;
 }
 
@@ -150,6 +158,8 @@ export type TargetingRule = 'closest';
 /** Something that happened during the last tick, for the view's effects. */
 export type WorldEvent =
   | { type: 'arrowHit'; vesselId: number }
+  /** The vessel took ramming damage. */
+  | { type: 'rammed'; vesselId: number }
   /** A Fireball exploded on the vessel, at this point. */
   | { type: 'fireballHit'; vesselId: number; x: number; y: number }
   /** A Fireball flew its burn-out time without a hit, and went out at this point. */
@@ -219,6 +229,8 @@ export interface World {
   /** The seeded random generator's state. */
   readonly random: number;
   readonly nextId: number;
+  /** The enemies touching the player vessel on the last tick. Ramming only hurts when a contact starts. */
+  readonly touching: readonly number[];
 }
 
 export function createWorld(seed: number, config: Config): World {
@@ -230,6 +242,7 @@ export function createWorld(seed: number, config: Config): World {
     countdownTicks,
     random: seed,
     nextId: 1,
+    touching: [],
     state: {
       player: newVessel(0, 'smallDinghy', 0, 0, 0, config),
       enemies: [],
@@ -303,8 +316,9 @@ export function step(world: World, commands: Commands): World {
       .filter((enemy) => enemy.health > 0)
       .map((enemy) => sail(enemy, enemyCommands(enemy, state.player, config), config)),
   ];
+  regenerate(moved[0], config);
+  const touching = ram(moved, world.touching, config, events);
   const afloat = pushApart(moved, config).map((vessel) => feelRimCurrent(vessel, config));
-  regenerate(afloat[0], config);
   const arrows = [...flyArrows(state.arrows, afloat, config, events), ...fireVolleys(afloat, config)];
   const flying = flyFireballs(state.fireballs, afloat, config, events);
 
@@ -331,6 +345,7 @@ export function step(world: World, commands: Commands): World {
   }
   const next: World = {
     ...world,
+    touching,
     state: {
       ...state,
       player,
@@ -575,6 +590,43 @@ function enemyCommands(enemy: Vessel, player: Vessel, config: Config): Commands 
 function steerTo(vessel: Vessel, heading: number, throttle: number, turnRate: number): Commands {
   const rudder = clamp(angleBetween(vessel.heading, heading) / (turnRate * TICK_SECONDS), -1, 1);
   return { throttleUp: false, throttleDown: false, rudder, setThrottle: throttle };
+}
+
+/**
+ * When the player vessel and an enemy start touching, each takes ramming damage (see rammingDamage) from
+ * the speed at which they close along the line between their centres. Returns the enemies touching the
+ * player vessel.
+ */
+function ram(vessels: Vessel[], touchedBefore: readonly number[], config: Config, events: WorldEvent[]): number[] {
+  const [player, ...enemies] = vessels;
+  const touching: number[] = [];
+  const velocity = (vessel: Vessel) => ({
+    x: Math.sin(vessel.heading) * vessel.speed + vessel.rimCurrent.x,
+    y: -Math.cos(vessel.heading) * vessel.speed + vessel.rimCurrent.y,
+  });
+  for (const enemy of enemies) {
+    const [playerRadius, enemyRadius] = [player, enemy].map((vessel) => config.vesselClasses[vessel.vesselClass].radius);
+    const dx = enemy.x - player.x;
+    const dy = enemy.y - player.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance >= playerRadius + enemyRadius) continue;
+    touching.push(enemy.id);
+    if (touchedBefore.includes(enemy.id) || player.health === 0) continue;
+    const [nx, ny] = distance > 0 ? [dx / distance, dy / distance] : [1, 0];
+    const [a, b] = [velocity(player), velocity(enemy)];
+    const closing = (a.x - b.x) * nx + (a.y - b.y) * ny;
+    if (closing <= 0) continue;
+    const full = (2 * config.rammingDamage * closing) / config.rammingSpeed / (playerRadius + enemyRadius);
+    for (const [vessel, otherRadius] of [
+      [player, enemyRadius],
+      [enemy, playerRadius],
+    ] as const) {
+      damage(vessel, full * otherRadius, config);
+      events.push({ type: 'rammed', vesselId: vessel.id });
+      if (vessel.health === 0) events.push({ type: 'vesselSunk', vesselId: vessel.id });
+    }
+  }
+  return touching;
 }
 
 /**

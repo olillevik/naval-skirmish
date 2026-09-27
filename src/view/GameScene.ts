@@ -271,7 +271,7 @@ export class GameScene extends Scene {
     this.drawFireballs(fireballs);
     for (const event of events) {
       if (event.type === 'fireballHit') this.explode(event.x, event.y);
-      if (event.type === 'arrowHit' || event.type === 'fireballHit') this.flashHit(event.vesselId === player.id ? this.dinghy : this.enemies.get(event.vesselId));
+      if (event.type === 'arrowHit' || event.type === 'fireballHit' || event.type === 'rammed') this.flashHit(event.vesselId === player.id ? this.dinghy : this.enemies.get(event.vesselId));
     }
     setText(this.waveLabel, `Wave ${wave}`);
     this.countdownLabel.hidden = waveStatus !== 'countdown';
