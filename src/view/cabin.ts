@@ -91,9 +91,10 @@ export class Cabin {
     return row;
   }
 
-  private fillRow(row: Row, { level, highestLevel, nextPrice, canBuy }: CabinItem): void {
+  private fillRow(row: Row, { level, highestLevel, nextPrice, canBuy, needsBiggerShip }: CabinItem): void {
     row.level.textContent = nextPrice === null ? text.maxed : highestLevel === null ? text.repeatable : text.level(level, highestLevel);
-    row.next.textContent = nextPrice === null ? '' : text.cabinItems[row.item].next(this.config, level);
+    row.next.textContent =
+      nextPrice === null ? '' : needsBiggerShip ? text.needsBiggerShip : text.cabinItems[row.item].next(this.config, level);
     row.price.textContent = nextPrice === null ? '' : text.price(nextPrice);
     row.buy.disabled = !canBuy;
   }

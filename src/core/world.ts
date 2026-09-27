@@ -119,6 +119,8 @@ export interface Config {
     fireballDamage: CabinItemConfig & { damage: number[] };
     /** The Captain's Fireball cooldown at each level from 1, in seconds. Level 0 is fireballCooldownSeconds. */
     fireballCooldown: CabinItemConfig & { cooldownSeconds: number[] };
+    /** Each level adds one cannon, up to the most the player vessel's class can carry. */
+    moreCannons: CabinItemConfig;
     /** Swaps the player vessel for a smallShip. */
     smallShip: CabinItemConfig;
   };
@@ -145,6 +147,7 @@ export type CabinItemName =
   | 'flamingArrows'
   | 'fireballDamage'
   | 'fireballCooldown'
+  | 'moreCannons'
   | 'smallShip';
 
 /** One Cabin item as the player sees it, so the view works out no rules of its own. */
@@ -158,6 +161,8 @@ export interface CabinItem {
   nextPrice: number | null;
   /** Whether buying it now would be allowed. */
   canBuy: boolean;
+  /** Whether the next level can't be bought because the player vessel carries all the cannons it can. A bigger ship carries more. */
+  needsBiggerShip: boolean;
 }
 
 /** What the player does in the Cabin. Applying one takes no time. */
@@ -390,7 +395,7 @@ export function createWorld(seed: number, config: Config): World {
     touching: [],
     cabinLevels: {
       repair: 0, maxHealth: 0, regen: 0, arrowRate: 0, volleySize: 0, flamingArrows: 0, fireballDamage: 0,
-      fireballCooldown: 0, smallShip: 0,
+      fireballCooldown: 0, moreCannons: 0, smallShip: 0,
     },
     state: {
       player: newVessel(0, 'smallDinghy', 0, 0, 0, config),
@@ -497,6 +502,11 @@ const cabinRules: Record<CabinItemName, CabinRule> = {
   flamingArrows: upgrade,
   fireballDamage: upgrade,
   fireballCooldown: upgrade,
+  moreCannons: {
+    ...upgrade,
+    useful: (player, config) => !carriesAllCannons(player, config),
+    apply: (player, config, levels) => ({ ...player, cannons: playerStats(player.vesselClass, levels, config).cannons }),
+  },
   smallShip: {
     repeatable: false,
     useful: () => true,
@@ -508,6 +518,10 @@ const cabinRules: Record<CabinItemName, CabinRule> = {
     },
   },
 };
+
+function carriesAllCannons(player: Vessel, config: Config): boolean {
+  return player.cannons >= config.vesselClasses[player.vesselClass].highestCannons;
+}
 
 /**
  * The player vessel's stats: its class stats with the Upgrade levels applied. A vessel of another class
@@ -521,7 +535,7 @@ function playerStats(vesselClass: VesselClassName, levels: CabinLevels, config: 
     regenRate: config.regenRate + levels.regen * cabin.regen.regenRate,
     volleySeconds: levels.arrowRate === 0 ? config.volleySeconds : cabin.arrowRate.volleySeconds[levels.arrowRate - 1],
     volleySize: stats.volleySize + levels.volleySize * cabin.volleySize.arrows,
-    cannons: stats.cannons,
+    cannons: Math.min(stats.cannons + levels.moreCannons, stats.highestCannons),
     fireballDamage: levels.fireballDamage === 0 ? config.fireballDamage : cabin.fireballDamage.damage[levels.fireballDamage - 1],
     fireballCooldownSeconds:
       levels.fireballCooldown === 0 ? config.fireballCooldownSeconds : cabin.fireballCooldown.cooldownSeconds[levels.fireballCooldown - 1],
@@ -536,7 +550,8 @@ function cabinItem(world: World, item: CabinItemName): CabinItem {
   const nextPrice = rule.repeatable ? prices[0] : (prices[level] ?? null);
   // Only while the Run is sailing, which means the player vessel is afloat and hasn't started sinking or falling.
   const canBuy = state.run === 'sailing' && nextPrice !== null && state.gold >= nextPrice && rule.useful(state.player, config);
-  return { item, level, highestLevel: rule.repeatable ? null : prices.length, nextPrice, canBuy };
+  const needsBiggerShip = item === 'moreCannons' && nextPrice !== null && carriesAllCannons(state.player, config);
+  return { item, level, highestLevel: rule.repeatable ? null : prices.length, nextPrice, canBuy, needsBiggerShip };
 }
 
 /**

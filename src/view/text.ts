@@ -28,6 +28,7 @@ const cabinItems: Record<CabinItemName, CabinItemText> = {
     name: 'Fireball cooldown',
     next: (config, level) => `a Fireball every ${config.cabin.fireballCooldown.cooldownSeconds[level]} s`,
   },
+  moreCannons: { name: 'More cannons', next: () => '+1 cannon' },
   smallShip: {
     name: 'Small ship',
     next: (config) => {
@@ -60,4 +61,5 @@ export const text = {
   targetingRule: 'Targeting rule',
   targetingRules,
   forSale: 'For sale',
+  needsBiggerShip: 'a bigger ship can carry more',
 };

@@ -64,6 +64,7 @@ export const defaultConfig: Config = {
     flamingArrows: { prices: [80], damagePerSecond: 2, burnSeconds: 3 },
     fireballDamage: { prices: [30, 60, 120], damage: [27, 35, 45] },
     fireballCooldown: { prices: [30, 60, 120], cooldownSeconds: [5, 4, 3] },
+    moreCannons: { prices: [60, 120, 240] },
     smallShip: { prices: [150] },
   },
 };

@@ -78,6 +78,7 @@ const config: Config = {
     flamingArrows: { prices: [80], damagePerSecond: 2, burnSeconds: 3 },
     fireballDamage: { prices: [30, 60, 120], damage: [55, 70, 90] },
     fireballCooldown: { prices: [30, 60, 120], cooldownSeconds: [5, 4, 3] },
+    moreCannons: { prices: [60, 120, 240] },
     smallShip: { prices: [150] },
   },
 };
@@ -1540,15 +1541,16 @@ describe('Wizard vessels', () => {
 
 /** The Cabin at the start of a Run, with the prices in the test config and no Gold. */
 const noPurchases = [
-  { item: 'repair', level: 0, highestLevel: null, nextPrice: 10, canBuy: false },
-  { item: 'maxHealth', level: 0, highestLevel: 3, nextPrice: 30, canBuy: false },
-  { item: 'regen', level: 0, highestLevel: 3, nextPrice: 25, canBuy: false },
-  { item: 'arrowRate', level: 0, highestLevel: 3, nextPrice: 20, canBuy: false },
-  { item: 'volleySize', level: 0, highestLevel: 4, nextPrice: 30, canBuy: false },
-  { item: 'flamingArrows', level: 0, highestLevel: 1, nextPrice: 80, canBuy: false },
-  { item: 'fireballDamage', level: 0, highestLevel: 3, nextPrice: 30, canBuy: false },
-  { item: 'fireballCooldown', level: 0, highestLevel: 3, nextPrice: 30, canBuy: false },
-  { item: 'smallShip', level: 0, highestLevel: 1, nextPrice: 150, canBuy: false },
+  { item: 'repair', level: 0, highestLevel: null, nextPrice: 10, canBuy: false, needsBiggerShip: false },
+  { item: 'maxHealth', level: 0, highestLevel: 3, nextPrice: 30, canBuy: false, needsBiggerShip: false },
+  { item: 'regen', level: 0, highestLevel: 3, nextPrice: 25, canBuy: false, needsBiggerShip: false },
+  { item: 'arrowRate', level: 0, highestLevel: 3, nextPrice: 20, canBuy: false, needsBiggerShip: false },
+  { item: 'volleySize', level: 0, highestLevel: 4, nextPrice: 30, canBuy: false, needsBiggerShip: false },
+  { item: 'flamingArrows', level: 0, highestLevel: 1, nextPrice: 80, canBuy: false, needsBiggerShip: false },
+  { item: 'fireballDamage', level: 0, highestLevel: 3, nextPrice: 30, canBuy: false, needsBiggerShip: false },
+  { item: 'fireballCooldown', level: 0, highestLevel: 3, nextPrice: 30, canBuy: false, needsBiggerShip: false },
+  { item: 'moreCannons', level: 0, highestLevel: 3, nextPrice: 60, canBuy: false, needsBiggerShip: true },
+  { item: 'smallShip', level: 0, highestLevel: 1, nextPrice: 150, canBuy: false, needsBiggerShip: false },
 ];
 
 describe('the Cabin', () => {
@@ -1824,7 +1826,7 @@ describe('Upgrades', () => {
     expect(itemOf(upgraded, 'maxHealth').level).toBe(1);
 
     const fresh = createWorld(1, rich(0));
-    expect(readState(fresh).cabin.map(({ level }) => level)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(readState(fresh).cabin.map(({ level }) => level)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     expect(readState(fresh).player.maxHealth).toBe(100);
   });
 });
@@ -2153,5 +2155,78 @@ describe('the small ship', () => {
     const fresh = readState(createWorld(1, rich(0)));
     expect(fresh.player).toMatchObject({ vesselClass: 'smallDinghy', health: 100, maxHealth: 100 });
     expect(itemOf(createWorld(1, rich(0)), 'smallShip')).toMatchObject({ level: 0, nextPrice: 150 });
+  });
+});
+
+describe('More cannons', () => {
+  const buy = (world: World, item: CabinItemName, times = 1) => {
+    for (let i = 0; i < times; i++) world = applyCabinAction(world, { type: 'buy', item });
+    return world;
+  };
+  const itemOf = (world: World, item: CabinItemName) => readState(world).cabin.find((entry) => entry.item === item)!;
+  /** One still enemy per Wave, worth the given Gold, that the player's first Arrow sinks. */
+  const rich = (base: Config = still, gold = 1000) => withClasses(base, { arrowDamage: 10 }, { health: 10, arrowDamage: 0, gold });
+  const paid = (config: Config) => until(untilSpawned(createWorld(1, config)), (state) => state.gold > 0);
+
+  it('costs 60 Gold on the small ship and raises its cannons from 1 to 2', () => {
+    const ship = buy(paid(rich()), 'smallShip');
+    expect(itemOf(ship, 'moreCannons')).toMatchObject({ level: 0, highestLevel: 3, nextPrice: 60, canBuy: true, needsBiggerShip: false });
+    const { gold } = readState(ship);
+
+    const upgraded = buy(ship, 'moreCannons');
+
+    expect(readState(upgraded)).toMatchObject({ gold: gold - 60, player: { cannons: 2 } });
+    expect(itemOf(upgraded, 'moreCannons')).toMatchObject({ level: 1, nextPrice: 120 });
+  });
+
+  it("can't be bought in a dinghy, leaving the world unchanged", () => {
+    const dinghy = paid(rich());
+
+    expect(itemOf(dinghy, 'moreCannons')).toMatchObject({ canBuy: false, needsBiggerShip: true });
+    expect(buy(dinghy, 'moreCannons')).toBe(dinghy);
+  });
+
+  it("can't be bought on a small ship with 2 cannons, leaving the world unchanged", () => {
+    const full = buy(buy(paid(rich()), 'smallShip'), 'moreCannons');
+    expect(readState(full).player.cannons).toBe(2);
+
+    expect(itemOf(full, 'moreCannons')).toMatchObject({ level: 1, nextPrice: 120, canBuy: false, needsBiggerShip: true });
+    expect(buy(full, 'moreCannons')).toBe(full);
+  });
+
+  it('is refused without enough Gold, but not because the vessel is full', () => {
+    const poor = buy(paid(rich(still, 150)), 'smallShip');
+    expect(readState(poor).gold).toBe(0);
+
+    expect(itemOf(poor, 'moreCannons')).toMatchObject({ canBuy: false, needsBiggerShip: false });
+    expect(buy(poor, 'moreCannons')).toBe(poor);
+  });
+
+  it('carries its levels over to a new vessel class, up to that class\'s most cannons', () => {
+    // A dinghy with room for 2 cannons, and a small ship with room for 4.
+    const roomy: Config = {
+      ...rich(),
+      vesselClasses: {
+        ...rich().vesselClasses,
+        smallDinghy: { ...rich().vesselClasses.smallDinghy, cannons: 1, highestCannons: 2 },
+        smallShip: { ...rich().vesselClasses.smallShip, cannons: 1, highestCannons: 4 },
+      },
+    };
+    const dinghy = buy(paid(roomy), 'moreCannons');
+    expect(readState(dinghy).player.cannons).toBe(2);
+
+    const ship = buy(dinghy, 'smallShip');
+
+    expect(readState(ship).player.cannons).toBe(2);
+    expect(itemOf(ship, 'moreCannons')).toMatchObject({ level: 1, canBuy: true });
+    expect(readState(buy(ship, 'moreCannons', 2)).player.cannons).toBe(4);
+  });
+
+  it('fires every bought cannon at the same moment', () => {
+    const upgraded = buy(buy(paid(rich({ ...still, cannonRange: 1200 })), 'smallShip'), 'moreCannons');
+
+    const firing = until(upgraded, (state) => cannonballsOf(state, 'player').length > 0);
+
+    expect(cannonballsOf(readState(firing), 'player')).toHaveLength(2);
   });
 });
