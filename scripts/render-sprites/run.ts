@@ -1,7 +1,7 @@
 /**
  * Renders the Pirate Kit models in art/pirate-kit into the sprite sheets in public/assets/kit, one frame per
- * heading, and writes their frame sizes to src/view/kitSheets.json. Run it with `npm run render-sprites` after
- * changing a model or a spec, and commit what it writes.
+ * heading, plus a water tile to match, and writes the sheets' frame sizes to src/view/kitSheets.json. Run it
+ * with `npm run render-sprites` after changing a model, a spec or the water, and commit what it writes.
  */
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { chromium } from '@playwright/test';
@@ -37,6 +37,8 @@ try {
     frameSizes[name] = frameSize;
     console.log(`${name}: ${frameSize.frameWidth}×${frameSize.frameHeight} px frames`);
   }
+  const water = await page.evaluate(() => window.renderWater());
+  writeFileSync('public/assets/kit/water.png', Buffer.from(water.split(',')[1], 'base64'));
   writeFileSync('src/view/kitSheets.json', `${JSON.stringify(frameSizes, null, 2)}\n`);
 } finally {
   await browser.close();

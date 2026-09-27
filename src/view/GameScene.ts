@@ -24,7 +24,7 @@ const MAX_FRAME_SECONDS = 0.25;
 const SPACE_COLOUR = 0x0b0e1f;
 const EDGE_COLOUR = 0xeaf6ff;
 const EDGE_WIDTH = 6;
-const RIM_CURRENT_MARKER_COLOUR = 0x3d8fc4;
+const RIM_CURRENT_MARKER_COLOUR = 0x1d5a8c;
 const RIM_CURRENT_MARKER_WIDTH = 4;
 const RING_SEGMENTS = 256;
 /** How far past the Edge space is drawn. Wider than half of any screen, so the view never runs out of stars. */
@@ -120,7 +120,7 @@ export class GameScene extends Scene {
     for (const [sheet, frameSize] of Object.entries(kitSheets)) {
       this.load.spritesheet(sheet, `${base}assets/kit/${sheet}.png`, frameSize);
     }
-    this.load.image('water', `${base}assets/tile_73.png`);
+    this.load.image('water', `${base}assets/kit/water.png`);
     this.load.image('fire', `${base}assets/fire1.png`);
     this.load.image('wizardFlag', `${base}assets/flag1.png`);
     for (const frame of EXPLOSION_FRAMES) this.load.image(frame, `${base}assets/${frame}.png`);

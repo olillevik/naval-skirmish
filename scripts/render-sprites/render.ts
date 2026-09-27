@@ -6,6 +6,7 @@ import {
   type Object3D,
   OrthographicCamera,
   Scene,
+  SRGBColorSpace,
   Vector3,
   WebGLRenderer,
 } from 'three';
@@ -118,9 +119,81 @@ function tintSails(vessel: Object3D, colour: Color): void {
   });
 }
 
+/** The water tile's side in pixels. Big enough that the repeat is hard to spot on a screen. */
+const WATER_SIZE = 1024;
+/** The toon water's two tones, close together so the vessels stand out, and the pale crests between them. */
+const WATER_DEEP = new Color(0x3d9dd1);
+const WATER_SHALLOW = new Color(0x4aa9db);
+const WATER_CREST = new Color(0x9edbf2);
+/** How much of the crest colour shows. */
+const WATER_CREST_STRENGTH = 0.6;
+/**
+ * Waves as whole numbers of cycles across the tile, so the tile repeats with no seam. Each is
+ * [cycles across, cycles down, amplitude, phase].
+ */
+const WATER_WAVES = [
+  [3, 5, 1, 0.3],
+  [6, -2, 0.8, 1.9],
+  [-4, 7, 0.7, 4.1],
+  [8, 5, 0.45, 2.6],
+  [-9, 4, 0.4, 5.2],
+  [5, -11, 0.3, 0.9],
+  [13, 8, 0.2, 3.3],
+  [-14, -7, 0.18, 1.4],
+  [2, 15, 0.15, 2.2],
+];
+/** Where the patches change tone, in wave height, and how wide the crest along that edge is, in pixels. */
+const WATER_EDGE = 0.1;
+const WATER_CREST_PIXELS = 2.5;
+
+/**
+ * A seamless water tile in the kit's flat, soft style: two tones of blue in rounded patches, with a pale
+ * crest along the edge of each lighter patch.
+ */
+function renderWater(): string {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = WATER_SIZE;
+  const context = canvas.getContext('2d')!;
+  const image = context.createImageData(WATER_SIZE, WATER_SIZE);
+  const total = WATER_WAVES.reduce((sum, [, , amplitude]) => sum + amplitude, 0);
+  const colour = new Color();
+  const rgb = { r: 0, g: 0, b: 0 };
+  for (let y = 0; y < WATER_SIZE; y++) {
+    for (let x = 0; x < WATER_SIZE; x++) {
+      let height = 0;
+      let slopeX = 0;
+      let slopeY = 0;
+      for (const [across, down, amplitude, phase] of WATER_WAVES) {
+        const angle = ((across * x + down * y) / WATER_SIZE) * Math.PI * 2 + phase;
+        height += amplitude * Math.sin(angle);
+        const slope = (amplitude * Math.cos(angle) * Math.PI * 2) / WATER_SIZE;
+        slopeX += slope * across;
+        slopeY += slope * down;
+      }
+      // Height over slope is roughly the distance in pixels to the edge, so every edge is equally sharp.
+      const pixels = (height / total - WATER_EDGE) / (Math.hypot(slopeX, slopeY) / total);
+      colour.lerpColors(WATER_DEEP, WATER_SHALLOW, smoothstep(-0.75, 0.75, pixels));
+      const crest = 1 - smoothstep(WATER_CREST_PIXELS - 1, WATER_CREST_PIXELS, Math.abs(pixels - WATER_CREST_PIXELS));
+      colour.lerp(WATER_CREST, crest * WATER_CREST_STRENGTH);
+      // Color works in linear light, and the canvas wants sRGB.
+      const { r, g, b } = colour.getRGB(rgb, SRGBColorSpace);
+      image.data.set([r * 255, g * 255, b * 255, 255], (y * WATER_SIZE + x) * 4);
+    }
+  }
+  context.putImageData(image, 0, 0);
+  return canvas.toDataURL('image/png');
+}
+
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  const t = Math.min(1, Math.max(0, (value - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
 declare global {
   interface Window {
     renderSheet: typeof renderSheet;
+    renderWater: typeof renderWater;
   }
 }
 window.renderSheet = renderSheet;
+window.renderWater = renderWater;
