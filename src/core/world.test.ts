@@ -1216,9 +1216,19 @@ describe('Wizard vessels', () => {
     expect(wizards.map((wave) => wave.length)).toEqual([0, 0, 1, 1, 1]);
   });
 
+  it('spawn with their Fireball on a full cooldown, and throw once it has passed', () => {
+    // wizardFireballCooldownSeconds is 10 s, which is 600 ticks. The player vessel is in range the whole time.
+    const spawned = untilSpawned(createWorld(1, wizard));
+    expect(readState(spawned).enemies[0].fireballTicks).toBe(600);
+    expect(readState(spawned).player.fireballTicks).toBe(0);
+
+    expect(enemyFireballs(readState(run(spawned, noCommands, 599)))).toEqual([]);
+    expect(enemyFireballs(readState(run(spawned, noCommands, 600)))).toHaveLength(1);
+  });
+
   it('throw Fireballs only at the player vessel, with their own damage, on their own cooldown', () => {
-    // The Wizard throws on the tick after the Wave spawns.
-    const thrown = step(untilSpawned(createWorld(1, wizard)), noCommands);
+    // The Wizard throws once its cooldown from spawning has passed.
+    const thrown = run(untilSpawned(createWorld(1, wizard)), noCommands, 600);
     const { player, enemies } = readState(thrown);
 
     expect(enemies[0].wizardVessel).toBe(true);
@@ -1238,15 +1248,15 @@ describe('Wizard vessels', () => {
   });
 
   it('throw nothing while the player vessel is out of Fireball range', () => {
-    const tooFar = run(untilSpawned(createWorld(1, { ...wizard, fireballRange: 500 })), noCommands, 60);
+    const tooFar = run(untilSpawned(createWorld(1, { ...wizard, fireballRange: 500 })), noCommands, 660);
 
     expect(readState(tooFar).fireballs).toEqual([]);
     expect(readState(tooFar).enemies[0].fireballTicks).toBe(0);
   });
 
   it('are the only enemies that throw Fireballs', () => {
-    const crowd = readState(step(untilSpawned(createWorld(1, { ...wizard, waveSizeBase: 3 })), noCommands));
-    const none = readState(run(untilSpawned(createWorld(1, { ...wizard, wizardVesselChance: 0 })), noCommands, 60));
+    const crowd = readState(run(untilSpawned(createWorld(1, { ...wizard, waveSizeBase: 3 })), noCommands, 600));
+    const none = readState(run(untilSpawned(createWorld(1, { ...wizard, wizardVesselChance: 0 })), noCommands, 660));
 
     expect(crowd.enemies).toHaveLength(4);
     expect(crowd.enemies.filter((enemy) => enemy.wizardVessel)).toHaveLength(1);
@@ -1517,13 +1527,14 @@ describe('Upgrades', () => {
   });
 
   it("leave a Wizard vessel's Fireball damage and cooldown as they were", () => {
-    // A Wizard vessel in every Wave. The first one's loss pays for both Upgrades at their highest level.
-    const wizards = rich(0, 1000, { ...still, fireballRange: 1200, wizardVesselsFromWave: 1, wizardVesselChance: 1 });
+    // A Wizard vessel in every Wave. The first one's loss pays for both Upgrades at their highest level, and the
+    // second one has the health to outlast its cooldown from spawning.
+    const wizards = rich(0, 1000, { ...still, fireballRange: 1200, wizardVesselsFromWave: 1, wizardVesselChance: 1, enemyHealthGrowth: 100 });
     const upgraded = buy(buy(wealthy(wizards), 'fireballDamage', 3), 'fireballCooldown', 3);
     expect(itemOf(upgraded, 'fireballCooldown').level).toBe(3);
 
-    // A Wizard throws on the tick after its Wave spawns.
-    const state = readState(step(nextWave(upgraded), noCommands));
+    // A Wizard throws once its cooldown from spawning has passed.
+    const state = readState(run(nextWave(upgraded), noCommands, 600));
     const wizard = state.enemies.find((enemy) => enemy.wizardVessel)!;
     expect(state.fireballs.filter((fireball) => fireball.side === 'enemy')).toEqual([expect.objectContaining({ damage: 25 })]);
     expect(wizard.fireballTicks).toBe(600);

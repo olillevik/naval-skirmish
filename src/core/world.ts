@@ -852,7 +852,8 @@ function advanceWave(world: World): World {
  * Wave n has waveSizeBase + n enemy dinghies, and enemy ships from shipsFromWave, at seeded points in the
  * spawn ring, each at least minSpawnDistance from the player vessel and clear of the others, facing the
  * player vessel. Their max health grows by enemyHealthGrowth each Wave. From wizardVesselsFromWave, each
- * enemy in turn has wizardVesselChance of being a Wizard vessel, until one is.
+ * enemy in turn has wizardVesselChance of being a Wizard vessel, until one is. A Wizard vessel spawns with its
+ * Fireball on a full cooldown, so it can't throw before the player has seen it.
  */
 function spawnWave(world: World): World {
   const { state, config } = world;
@@ -883,6 +884,7 @@ function spawnWave(world: World): World {
       const enemy = newVessel(nextId++, vesselClass, x, y, bearing(x, y, player.x, player.y), config, health);
       enemy.wizardVessel = !wizardAboard && wave >= config.wizardVesselsFromWave && random.next() < config.wizardVesselChance;
       wizardAboard ||= enemy.wizardVessel;
+      if (enemy.wizardVessel) enemy.fireballTicks = ticksFor(config.wizardFireballCooldownSeconds);
       enemies.push(enemy);
       break;
     }
