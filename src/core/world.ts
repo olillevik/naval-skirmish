@@ -43,8 +43,12 @@ export interface Config {
   volleySeconds: number;
   /** The angle between neighbouring Arrows in one Volley, radians. */
   volleySpread: number;
-  /** Health one of the Captain's Fireballs takes off the vessel it hits. */
+  /** Health one of the Captain's Fireballs takes off each vessel it hurts. */
   fireballDamage: number;
+  /** A Fireball hurts every vessel on the other side whose centre is this close to the centre of the vessel it hits, px. */
+  fireballSplashRadius: number;
+  /** Every vessel a Fireball hurts, and doesn't sink, starts burning for burnSeconds, taking damagePerSecond. */
+  fireballBurn: Burn;
   /** The Captain only throws a Fireball at an enemy this close, px, and an enemy Wizard only at the player vessel this close. */
   fireballRange: number;
   /** px/s. */
@@ -59,7 +63,7 @@ export interface Config {
   wizardVesselsFromWave: number;
   /** From wizardVesselsFromWave, the chance each enemy has of being a Wizard vessel, until one in the Wave is. */
   wizardVesselChance: number;
-  /** Health an enemy Wizard's Fireball takes off the player vessel. */
+  /** Health an enemy Wizard's Fireball takes off each vessel it hurts. */
   wizardFireballDamage: number;
   /** The time between one of an enemy Wizard's Fireballs and the next, in seconds. */
   wizardFireballCooldownSeconds: number;
@@ -99,11 +103,8 @@ export interface Config {
     arrowRate: CabinItemConfig & { volleySeconds: number[] };
     /** Each level adds this many Arrows to the player Crew's Volleys. */
     volleySize: CabinItemConfig & { arrows: number };
-    /**
-     * Once bought, every Arrow the player Crew lands sets its target burning for burnSeconds, taking
-     * damagePerSecond. A new hit restarts the time. Burns don't stack.
-     */
-    flamingArrows: CabinItemConfig & { damagePerSecond: number; burnSeconds: number };
+    /** Once bought, every Arrow the player Crew lands sets its target burning. */
+    flamingArrows: CabinItemConfig & Burn;
     /** The damage of the Captain's Fireballs at each level from 1. Level 0 is fireballDamage. */
     fireballDamage: CabinItemConfig & { damage: number[] };
     /** The Captain's Fireball cooldown at each level from 1, in seconds. Level 0 is fireballCooldownSeconds. */
@@ -111,6 +112,12 @@ export interface Config {
     /** Swaps the player vessel for a smallShip. */
     smallShip: CabinItemConfig;
   };
+}
+
+/** Fire damage over time. A new burn replaces the vessel's current one. */
+export interface Burn {
+  damagePerSecond: number;
+  burnSeconds: number;
 }
 
 export interface CabinItemConfig {
@@ -203,8 +210,10 @@ export interface Vessel {
   regenDelayTicks: number;
   /** Ticks left before a sinking vessel is removed. */
   sinkingTicks: number;
-  /** Ticks left of the burn a Flaming arrow set. 0 means the vessel isn't burning. */
+  /** Ticks left of the burn a Fireball or a Flaming arrow set. 0 means the vessel isn't burning. */
   burnTicks: number;
+  /** The damage per second of the current burn. */
+  burnDamagePerSecond: number;
 }
 
 /** Flies straight until it hits a vessel on the other side or has flown the Arrow range. */
@@ -251,8 +260,8 @@ export type WorldEvent =
   | { type: 'arrowHit'; vesselId: number }
   /** The vessel took ramming damage. */
   | { type: 'rammed'; vesselId: number }
-  /** A Fireball exploded on the vessel, at this point. */
-  | { type: 'fireballHit'; vesselId: number; x: number; y: number }
+  /** A Fireball exploded at this point, the centre of the vessel it hit, and hurt these vessels. */
+  | { type: 'fireballHit'; vesselIds: number[]; x: number; y: number }
   /** A Fireball flew its burn-out time without a hit, and went out at this point. */
   | { type: 'fireballBurnedOut'; x: number; y: number }
   /** The vessel reached zero health and started sinking. */
@@ -394,6 +403,7 @@ function newVessel(
     regenDelayTicks: 0,
     sinkingTicks: 0,
     burnTicks: 0,
+    burnDamagePerSecond: 0,
   };
 }
 
@@ -606,7 +616,7 @@ function flyArrows(arrows: Arrow[], vessels: Vessel[], config: Config, events: W
     const hit = firstHit(arrow, dx, dy, vessels, config);
     if (hit) {
       damage(hit, arrow.damage, config);
-      if (arrow.flaming && hit.health > 0) hit.burnTicks = ticksFor(config.cabin.flamingArrows.burnSeconds);
+      if (arrow.flaming) setBurning(hit, config.cabin.flamingArrows);
       events.push({ type: 'arrowHit', vesselId: hit.id });
       if (hit.health === 0) events.push({ type: 'vesselSunk', vesselId: hit.id });
       continue;
@@ -617,12 +627,19 @@ function flyArrows(arrows: Arrow[], vessels: Vessel[], config: Config, events: W
   return flying;
 }
 
+/** Replaces the vessel's current burn with this one, unless the vessel is sinking. Burns don't stack. */
+function setBurning(vessel: Vessel, burn: Burn): void {
+  if (vessel.health === 0) return;
+  vessel.burnTicks = ticksFor(burn.burnSeconds);
+  vessel.burnDamagePerSecond = burn.damagePerSecond;
+}
+
 /** Each burning vessel afloat takes one tick of burn damage, and can sink from it. */
 function burn(vessels: Vessel[], config: Config, events: WorldEvent[]): void {
   for (const vessel of vessels) {
     if (vessel.burnTicks === 0 || vessel.health === 0) continue;
     vessel.burnTicks--;
-    damage(vessel, config.cabin.flamingArrows.damagePerSecond * TICK_SECONDS, config);
+    damage(vessel, vessel.burnDamagePerSecond * TICK_SECONDS, config);
     if (vessel.health === 0) events.push({ type: 'vesselSunk', vesselId: vessel.id });
   }
 }
@@ -637,8 +654,8 @@ function firstHit(shot: Arrow | Fireball, dx: number, dy: number, vessels: Vesse
 
 /**
  * Turns each Fireball toward its target by at most one tick of the Fireball turn rate, then moves it one
- * tick. One of the Captain's Fireballs whose target is lost picks a new one by the Targeting rule. A Fireball that touches a vessel on the other side explodes on the first one it reaches. One that
- * has flown for the burn-out time burns out.
+ * tick. One of the Captain's Fireballs whose target is lost picks a new one by the Targeting rule. A Fireball that touches a vessel on the other side explodes on the first one it reaches,
+ * hurting every vessel on the other side within the splash radius and setting them burning. One that has flown for the burn-out time burns out.
  */
 function flyFireballs(fireballs: Fireball[], vessels: Vessel[], rule: TargetingRule, config: Config, events: WorldEvent[]): Fireball[] {
   const flying: Fireball[] = [];
@@ -655,9 +672,15 @@ function flyFireballs(fireballs: Fireball[], vessels: Vessel[], rule: TargetingR
     const dy = -Math.cos(heading) * distance;
     const hit = firstHit(fireball, dx, dy, vessels, config);
     if (hit) {
-      damage(hit, fireball.damage, config);
-      events.push({ type: 'fireballHit', vesselId: hit.id, x: hit.x, y: hit.y });
-      if (hit.health === 0) events.push({ type: 'vesselSunk', vesselId: hit.id });
+      const splashed = vessels.filter(
+        (vessel) => sideOf(vessel) !== fireball.side && vessel.health > 0 && Math.hypot(vessel.x - hit.x, vessel.y - hit.y) <= config.fireballSplashRadius,
+      );
+      events.push({ type: 'fireballHit', vesselIds: splashed.map((vessel) => vessel.id), x: hit.x, y: hit.y });
+      for (const vessel of splashed) {
+        damage(vessel, fireball.damage, config);
+        setBurning(vessel, config.fireballBurn);
+        if (vessel.health === 0) events.push({ type: 'vesselSunk', vesselId: vessel.id });
+      }
       continue;
     }
     const [x, y] = [fireball.x + dx, fireball.y + dy];

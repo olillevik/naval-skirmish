@@ -350,8 +350,9 @@ export class GameScene extends Scene {
     this.drawArrows(arrows);
     this.drawFireballs(fireballs);
     for (const event of events) {
+      const hurt = event.type === 'fireballHit' ? event.vesselIds : event.type === 'arrowHit' || event.type === 'rammed' ? [event.vesselId] : [];
+      for (const id of hurt) this.flashHit(id === player.id ? this.dinghy : this.enemies.get(id));
       if (event.type === 'fireballHit') this.explode(event.x, event.y);
-      if (event.type === 'arrowHit' || event.type === 'fireballHit' || event.type === 'rammed') this.flashHit(event.vesselId === player.id ? this.dinghy : this.enemies.get(event.vesselId));
     }
     setText(this.waveLabel, `Wave ${wave}`);
     this.countdownLabel.hidden = waveStatus !== 'countdown';
@@ -466,8 +467,11 @@ export class GameScene extends Scene {
     }
   }
 
+  /** The blast grows until its biggest frame covers the Fireball's splash. */
   private explode(x: number, y: number): void {
-    const blast = this.add.sprite(x, y, EXPLOSION_FRAMES[0]).setDepth(2).play('explosion');
+    const biggest = this.textures.getFrame(EXPLOSION_FRAMES[EXPLOSION_FRAMES.length - 1]);
+    const scale = (defaultConfig.fireballSplashRadius * 2) / biggest.width;
+    const blast = this.add.sprite(x, y, EXPLOSION_FRAMES[0]).setDepth(2).setScale(scale).play('explosion');
     blast.once('animationcomplete', () => blast.destroy());
   }
 

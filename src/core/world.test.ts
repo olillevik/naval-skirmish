@@ -39,6 +39,8 @@ const config: Config = {
   volleySeconds: 1,
   volleySpread: 0.1,
   fireballDamage: 40,
+  fireballSplashRadius: 80,
+  fireballBurn: { damagePerSecond: 2, burnSeconds: 3 },
   fireballRange: 600,
   fireballSpeed: 300,
   fireballCooldownSeconds: 6,
@@ -842,7 +844,7 @@ describe('the Fireball', () => {
     expect(readState(createWorld(1, config)).targetingRule).toBe('closest');
     expect(state.fireballTargetId).toBe(closest.id);
     const [fireball] = readState(step(spawned, throwing)).fireballs;
-    expect(fireball).toMatchObject({ side: 'player', targetId: closest.id, damage: 40 });
+    expect(fireball).toMatchObject({ side: 'player', targetId: closest.id, damage: 20 });
   });
 
   it('launches one Fireball at the target in range and starts the cooldown, which blocks throws until it runs out', () => {
@@ -889,14 +891,15 @@ describe('the Fireball', () => {
     const state = readState(world);
 
     expect(Math.abs(turned)).toBeGreaterThan(0.05);
-    expect(fireballEvents(state)).toEqual([{ type: 'fireballHit', vesselId: enemy.id, x: state.enemies[0].x, y: state.enemies[0].y }]);
-    expect(state.enemies[0].health).toBe(60);
-    expect(readState(step(world, noCommands)).enemies[0].health).toBe(60);
+    expect(fireballEvents(state)).toEqual([{ type: 'fireballHit', vesselIds: [enemy.id], x: state.enemies[0].x, y: state.enemies[0].y }]);
+    expect(state.enemies[0].health).toBe(80);
+    // Only the burn hurts it after that.
+    expect(readState(step(world, noCommands)).enemies[0].health).toBeCloseTo(80 - 2 / 60);
   });
 
   it('sinks an enemy it takes to zero health, which credits Gold', () => {
     // Long enough in flight to reach the farthest spawn point.
-    const fragile = withClasses({ ...inRange, fireballBurnOutSeconds: 10 }, {}, { health: 40 });
+    const fragile = withClasses({ ...inRange, fireballBurnOutSeconds: 10 }, {}, { health: 20 });
     const sunk = until(step(untilSpawned(createWorld(1, fragile)), throwing), (state) => state.enemies[0].health === 0);
 
     expect(readState(sunk).events).toEqual(
@@ -906,6 +909,81 @@ describe('the Fireball', () => {
         expect.objectContaining({ type: 'goldCredited', gold: 5 }),
       ]),
     );
+  });
+
+  it('hurts every enemy within the splash radius of the vessel it hits, none outside it, and sets them burning', () => {
+    // Ten still enemies on a ring 300 px round the player vessel, and a splash wide enough to catch some of them but not all.
+    const ring = 300 / defaultConfig.arenaRadius;
+    const crowd: Config = { ...inRange, waveSizeBase: 9, minSpawnDistance: 0, spawnInner: ring, spawnOuter: ring, fireballSplashRadius: 200 };
+    const exploded = until(step(untilSpawned(createWorld(1, crowd)), throwing), (state) => state.events.some((event) => event.type === 'fireballHit'));
+    const state = readState(exploded);
+    const [blast] = state.events.flatMap((event) => (event.type === 'fireballHit' ? [event] : []));
+    const inSplash = state.enemies.filter((enemy) => distanceBetween(enemy, blast) <= 200);
+    const outside = state.enemies.filter((enemy) => distanceBetween(enemy, blast) > 200);
+
+    expect(inSplash.length).toBeGreaterThan(1);
+    expect(outside.length).toBeGreaterThan(0);
+    expect(blast.vesselIds).toEqual(inSplash.map((enemy) => enemy.id));
+    // fireballBurn is 2 damage per second for 3 s, which is 180 ticks.
+    for (const enemy of inSplash) expect(enemy).toMatchObject({ health: 80, burnTicks: 180, burnDamagePerSecond: 2 });
+    for (const enemy of outside) expect(enemy).toMatchObject({ health: 100, burnTicks: 0 });
+  });
+
+  it('leaves a Wave 1 enemy dinghy afloat after one Fireball and its burn with the default config, and sinks it with two', () => {
+    // One still enemy 300 px away, within Fireball range. Arrows do no harm, so only the Fireballs count.
+    const near = withClasses(
+      { ...still, minSpawnDistance: 0, spawnInner: 300 / defaultConfig.arenaRadius, spawnOuter: 300 / defaultConfig.arenaRadius },
+      { arrowDamage: 0 },
+      { arrowDamage: 0 },
+    );
+    const hit = until(step(untilSpawned(createWorld(1, near)), throwing), (state) => state.enemies[0].health < 30);
+    expect(readState(hit)).toMatchObject({ wave: 1, enemies: [{ maxHealth: 30, health: 10, burnTicks: 180 }] });
+
+    const burnedOut = until(hit, (state) => state.enemies[0].burnTicks === 0);
+    expect(readState(burnedOut).enemies[0].health).toBeCloseTo(4);
+    const sunk = until(burnedOut, (state) => state.enemies[0].health === 0, () => throwing);
+    expect(readState(sunk).events).toContainEqual(expect.objectContaining({ type: 'fireballHit' }));
+  });
+
+  it('sinks an enemy with its burn, which credits Gold', () => {
+    // The blast takes 20 of the enemy's 25 health, and the burn the last 5.
+    const fragile = withClasses({ ...inRange, fireballBurnOutSeconds: 10 }, {}, { health: 25 });
+    const hit = until(step(untilSpawned(createWorld(1, fragile)), throwing), (state) => state.enemies[0].health < 25);
+    const { id } = readState(hit).enemies[0];
+    const sunk = until(hit, (state) => state.enemies[0].health === 0);
+
+    expect(readState(sunk).events).toEqual([
+      { type: 'vesselSunk', vesselId: id },
+      { type: 'goldCredited', vesselId: id, gold: 5 },
+    ]);
+  });
+
+  it('credits no Gold for an enemy its burn sinks on the same tick as the player vessel', () => {
+    // The Captain and an enemy Wizard throw at each other on the same tick, with the same damage and burn, so
+    // both burns sink their vessels on the same tick.
+    const trade = withClasses(
+      {
+        ...still,
+        fireballRange: 1200,
+        fireballBurnOutSeconds: 10,
+        wizardVesselsFromWave: 1,
+        wizardVesselChance: 1,
+        fireballDamage: 50,
+        wizardFireballDamage: 50,
+        fireballBurn: { damagePerSecond: 100, burnSeconds: 3 },
+      },
+      { arrowDamage: 0 },
+      { health: 100, arrowDamage: 0 },
+    );
+    // wizardFireballCooldownSeconds is 10 s, which is 600 ticks.
+    const thrown = step(run(untilSpawned(createWorld(1, trade)), noCommands, 599), throwing);
+    expect(readState(thrown).fireballs).toHaveLength(2);
+    const sunk = until(thrown, (state) => state.run !== 'sailing');
+    const { enemies, events } = readState(sunk);
+
+    expect(readState(sunk)).toMatchObject({ run: 'sinking', gold: 0, player: { health: 0 }, enemies: [{ health: 0 }] });
+    expect(events).toContainEqual({ type: 'vesselSunk', vesselId: enemies[0].id });
+    expect(events.filter((event) => event.type === 'fireballHit' || event.type === 'goldCredited')).toEqual([]);
   });
 
   it('can miss a target that turns faster than it does, and then burns out after the set time', () => {
@@ -1231,18 +1309,37 @@ describe('Wizard vessels', () => {
 
     expect(enemies[0].wizardVessel).toBe(true);
     expect(enemyFireballs(readState(thrown))).toEqual([
-      expect.objectContaining({ side: 'enemy', targetId: 0, damage: 25, x: enemies[0].x, y: enemies[0].y }),
+      expect.objectContaining({ side: 'enemy', targetId: 0, damage: 20, x: enemies[0].x, y: enemies[0].y }),
     ]);
     expect(turnBetween(readState(thrown).fireballs[0].heading, bearingTo(enemies[0], player))).toBeCloseTo(0);
     // wizardFireballCooldownSeconds is 10 s, which is 600 ticks. The Captain's cooldown is untouched.
     expect(enemies[0].fireballTicks).toBe(600);
     expect(player.fireballTicks).toBe(0);
     const hit = until(thrown, (state) => state.events.some((event) => event.type === 'fireballHit'));
-    expect(readState(hit).events).toContainEqual({ type: 'fireballHit', vesselId: 0, x: expect.any(Number), y: expect.any(Number) });
-    expect(readState(hit).player.health).toBe(75);
+    expect(readState(hit).events).toContainEqual({ type: 'fireballHit', vesselIds: [0], x: expect.any(Number), y: expect.any(Number) });
+    expect(readState(hit).player).toMatchObject({ health: 80, burnTicks: 180, burnDamagePerSecond: 2 });
     const thrownAt = (world: World) => enemyFireballs(readState(world)).filter((fireball) => fireball.burnTicks === 600).length;
     expect(thrownAt(run(thrown, noCommands, 599))).toBe(0);
     expect(thrownAt(run(thrown, noCommands, 600))).toBe(1);
+  });
+
+  it('splash and burn only the player vessel, never their own side', () => {
+    // Four enemies, one of them the Wizard vessel, and a splash that covers the whole Arena. Burns do no harm,
+    // so each vessel's health shows only the blasts.
+    const crowd: Config = { ...wizard, waveSizeBase: 3, fireballSplashRadius: 5000, fireballBurn: { damagePerSecond: 0, burnSeconds: 3 } };
+    const blastOf = (state: WorldState) => state.events.find((event) => event.type === 'fireballHit');
+    // The Captain throws first, and the Wizard once its cooldown from spawning has passed.
+    const thrown = step(untilSpawned(createWorld(1, crowd)), { ...noCommands, throwFireball: true });
+    const captains = until(thrown, (state) => blastOf(state) !== undefined);
+    const ids = readState(captains).enemies.map((enemy) => enemy.id);
+    expect(blastOf(readState(captains))).toMatchObject({ vesselIds: ids });
+    expect(readState(captains).player.health).toBe(100);
+
+    const wizards = until(step(captains, noCommands), (state) => blastOf(state) !== undefined);
+
+    expect(blastOf(readState(wizards))).toMatchObject({ vesselIds: [0] });
+    expect(readState(wizards).player).toMatchObject({ health: 80, burnTicks: 180 });
+    expect(readState(wizards).enemies.map((enemy) => enemy.health)).toEqual([980, 980, 980, 980]);
   });
 
   it('throw nothing while the player vessel is out of Fireball range', () => {
@@ -1532,7 +1629,7 @@ describe('Upgrades', () => {
   it("set the damage of the Captain's Fireballs to the configured damage at each level", () => {
     const start = wealthy(inRange);
 
-    expect(readState(step(nextWave(start), throwing)).fireballs[0].damage).toBe(40);
+    expect(readState(step(nextWave(start), throwing)).fireballs[0].damage).toBe(20);
     for (const level of [1, 2, 3]) {
       const [fireball] = readState(step(nextWave(buy(start, 'fireballDamage', level)), throwing)).fireballs;
       expect(fireball).toMatchObject({ side: 'player', damage: cabin.fireballDamage.damage[level - 1] });
@@ -1574,7 +1671,7 @@ describe('Upgrades', () => {
     // A Wizard throws once its cooldown from spawning has passed.
     const state = readState(run(nextWave(upgraded), noCommands, 600));
     const wizard = state.enemies.find((enemy) => enemy.wizardVessel)!;
-    expect(state.fireballs.filter((fireball) => fireball.side === 'enemy')).toEqual([expect.objectContaining({ damage: 25 })]);
+    expect(state.fireballs.filter((fireball) => fireball.side === 'enemy')).toEqual([expect.objectContaining({ damage: 20 })]);
     expect(wizard.fireballTicks).toBe(600);
   });
 
@@ -1784,6 +1881,31 @@ describe('Flaming arrows', () => {
     expect(health).toBeCloseTo(100 - 10 - 2 - 10);
 
     expect(enemyOf(run(second, noCommands, 30)).health).toBeCloseTo(health - 1);
+  });
+
+  it("replace a Fireball's burn, and are replaced by one, without stacking", () => {
+    // The Fireball does no damage of its own, and burns hotter and longer than a Flaming arrow.
+    const mixed: Config = {
+      ...burning(5, 9),
+      fireballDamage: 0,
+      fireballRange: 1200,
+      fireballBurnOutSeconds: 10,
+      fireballBurn: { damagePerSecond: 6, burnSeconds: 10 },
+    };
+    const wave2 = until(paid(mixed, true), (state) => state.wave === 2 && state.waveStatus === 'fighting');
+    // The Arrow is faster than the Fireball, so it lands first.
+    const arrowHit = untilHits(step(wave2, { ...noCommands, throwFireball: true }), 1);
+    expect(enemyOf(arrowHit)).toMatchObject({ burnTicks: 180, burnDamagePerSecond: 2 });
+    expect(readState(arrowHit).fireballs).toHaveLength(1);
+
+    const fireballHit = until(arrowHit, (state) => state.events.some((event) => event.type === 'fireballHit'));
+    expect(enemyOf(fireballHit)).toMatchObject({ burnTicks: 600, burnDamagePerSecond: 6 });
+    const health = enemyOf(fireballHit).health;
+    expect(enemyOf(run(fireballHit, noCommands, 30)).health).toBeCloseTo(health - 3);
+
+    // The next Volley lands 5 s after the first.
+    const nextHit = untilHits(fireballHit, 1);
+    expect(enemyOf(nextHit)).toMatchObject({ burnTicks: 180, burnDamagePerSecond: 2 });
   });
 
   it('can sink an enemy, which credits full Gold and counts toward the Wave', () => {
