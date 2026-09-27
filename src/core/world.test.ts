@@ -536,16 +536,16 @@ describe('enemy AI', () => {
       expect(enemies).toHaveLength(3);
       for (const [i, enemy] of enemies.entries()) {
         expect(distanceBetween(enemy, player)).toBeLessThan(distanceBetween(readState(spawned).enemies[i], player));
-        // enemyCircleRange is 0.9, so about 315 px.
-        expect(distanceBetween(enemy, player)).toBeGreaterThan(0.8 * 350);
-        expect(distanceBetween(enemy, player)).toBeLessThan(350);
+        // enemyCircleRange is 0.9, so about 220 px.
+        expect(distanceBetween(enemy, player)).toBeGreaterThan(0.8 * 245);
+        expect(distanceBetween(enemy, player)).toBeLessThan(245);
       }
       // Still circling, not parked.
       expect(distanceBetween(readState(run(later, noCommands, 60)).enemies[0], enemies[0])).toBeGreaterThan(30);
     }
   });
 
-  it("sails an enemy ship by the ship class's stats, faster than a dinghy but slower to get going and to turn", () => {
+  it("sails an enemy ship by the ship class's stats, faster than a dinghy and turning as fast, but slower to get going", () => {
     const fleet: Config = { ...waves, shipsFromWave: 1 };
     const { topSpeed, acceleration, turnRate } = defaultConfig.vesselClasses.enemyShip;
     const shipIn = (world: World) => readState(world).enemies.find((enemy) => enemy.vesselClass === 'enemyShip')!;
@@ -562,7 +562,7 @@ describe('enemy AI', () => {
 
     expect(topSpeed).toBeGreaterThan(defaultConfig.vesselClasses.enemyDinghy.topSpeed);
     expect(acceleration).toBeLessThan(defaultConfig.vesselClasses.enemyDinghy.acceleration);
-    expect(turnRate).toBeLessThan(defaultConfig.vesselClasses.enemyDinghy.turnRate);
+    expect(turnRate).toBe(defaultConfig.vesselClasses.enemyDinghy.turnRate);
     expect(fastest).toBeCloseTo(topSpeed);
     expect(sharpest).toBeCloseTo(turnRate / 60);
   });
@@ -636,9 +636,10 @@ describe('determinism over a full Wave', () => {
       return readState(world);
     };
 
-    // One of the three enemies in Wave 1 has sunk, and the player vessel is still afloat.
+    // The three enemies in Wave 1 have hit the player vessel, which is still afloat.
     expect(play().run).toBe('sailing');
-    expect(play().enemies).toHaveLength(2);
+    expect(play().enemies).toHaveLength(3);
+    expect(play().player.health).toBeLessThan(100);
     expect(play()).toEqual(play());
   });
 });
@@ -911,8 +912,8 @@ describe('the Fireball', () => {
     const sluggish: Config = { ...circling, fireballTurnRate: 0.1 };
     let world = step(run(untilSpawned(createWorld(1, sluggish)), noCommands, 60 * 20), throwing);
     expect(readState(world).fireballs).toHaveLength(1);
-    // fireballBurnOutSeconds is 3 s, which is 180 ticks.
-    world = run(world, noCommands, 179);
+    // fireballBurnOutSeconds is 2 s, which is 120 ticks.
+    world = run(world, noCommands, 119);
     expect(readState(world).fireballs).toHaveLength(1);
     world = step(world, noCommands);
 
@@ -1249,6 +1250,49 @@ describe('Wizard vessels', () => {
 
     expect(readState(tooFar).fireballs).toEqual([]);
     expect(readState(tooFar).enemies[0].fireballTicks).toBe(0);
+  });
+
+  it('throw a default Fireball that a small dinghy fleeing at full speed escapes from more than 300 px away, and not from less', () => {
+    /** A still Wizard vessel, spawned this far from the player vessel at the centre. Arrows do no harm. */
+    const wizardAt = (distance: number) =>
+      withClasses(
+        { ...still, wizardVesselsFromWave: 1, wizardVesselChance: 1, minSpawnDistance: 0, spawnInner: distance / 1500, spawnOuter: distance / 1500 },
+        { arrowDamage: 0 },
+        { arrowDamage: 0 },
+      );
+    /**
+     * Points the player vessel straight away from the Wizard, and sets off at full throttle 90 ticks before the
+     * Wizard throws, which is how long a small dinghy takes to reach top speed. Gives the gap from the Fireball
+     * to the dinghy's hull when it is thrown, and how the Fireball ended.
+     */
+    const flee = (config: Config) => {
+      const { turnRate, radius, topSpeed } = defaultConfig.vesselClasses.smallDinghy;
+      const away = (at: World, setThrottle: number): Commands => {
+        const { player, enemies } = readState(at);
+        const turn = turnBetween(player.heading, bearingTo(enemies[0], player)) / (turnRate / 60);
+        return { ...noCommands, rudder: Math.max(-1, Math.min(1, turn)), setThrottle };
+      };
+      let world = untilSpawned(createWorld(1, config));
+      // wizardFireballCooldownSeconds is 10 s, which is 600 ticks.
+      for (let tick = 1; tick <= 600; tick++) world = step(world, away(world, tick > 510 ? 1 : 0));
+      const { player, enemies, fireballs } = readState(world);
+      expect(fireballs).toHaveLength(1);
+      expect(player.speed).toBeCloseTo(topSpeed);
+      expect(turnBetween(player.heading, bearingTo(enemies[0], player))).toBeCloseTo(0);
+      const gap = distanceBetween(player, enemies[0]) - radius;
+      const flown = until(world, (state) => state.fireballs.length === 0, (at) => away(at, 1));
+      return { gap, ended: readState(flown).events.find((event) => event.type.startsWith('fireball'))?.type };
+    };
+
+    const far = flee(wizardAt(215));
+    const near = flee(wizardAt(205));
+
+    expect(far.gap).toBeGreaterThan(300);
+    expect(far.gap).toBeLessThan(310);
+    expect(far.ended).toBe('fireballBurnedOut');
+    expect(near.gap).toBeGreaterThan(290);
+    expect(near.gap).toBeLessThan(300);
+    expect(near.ended).toBe('fireballHit');
   });
 
   it('are the only enemies that throw Fireballs', () => {

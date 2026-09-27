@@ -32,7 +32,7 @@ const cabinItems: Record<CabinItemName, CabinItemText> = {
     name: 'Small ship',
     next: (config) => {
       const { health, topSpeed } = config.vesselClasses.smallShip;
-      return `${health} base max health, ${topSpeed} px/s, slower to turn`;
+      return `${health} base max health, ${topSpeed} px/s, slower to get going`;
     },
   },
 };
