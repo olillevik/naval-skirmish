@@ -67,7 +67,7 @@ export class Cabin {
       }),
     );
     for (const item of cabin) this.fillRow(this.rows.get(item.item) ?? this.addRow(item.item), item);
-    // An item the state leaves out, such as the vessel the player already sails, hides until a new Run lists it again.
+    // An item the state leaves out, such as a vessel already bought or not yet offered, hides until the state lists it.
     for (const row of this.rows.values()) row.element.hidden = !cabin.some(({ item }) => item === row.item);
     this.element.hidden = false;
   }

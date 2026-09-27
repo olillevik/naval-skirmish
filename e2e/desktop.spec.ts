@@ -228,6 +228,8 @@ test('at the start of a Run the Cabin shows Gold, health and the dinghy, and Rep
   await expect(page.getByTestId('cabin-item-volleySize')).toContainText('30 Gold');
   await expect(page.getByTestId('cabin-item-smallShip')).toContainText('Small ship');
   await expect(page.getByTestId('cabin-item-smallShip')).toContainText('150 Gold');
+  // The medium ship is offered only once the small ship is owned.
+  await expect(page.getByTestId('cabin-item-mediumShip')).toHaveCount(0);
   await expect(page.getByTestId('cabin-item-moreCannons')).toContainText('a bigger ship can carry more');
   const buttons = page.getByTestId('cabin-items').getByRole('button');
   await expect(buttons).not.toHaveCount(0);

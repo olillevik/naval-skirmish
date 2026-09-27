@@ -7,6 +7,10 @@
     "frameWidth": 120,
     "frameHeight": 168
   },
+  "ship-medium": {
+    "frameWidth": 146,
+    "frameHeight": 238
+  },
   "ship-black": {
     "frameWidth": 120,
     "frameHeight": 168

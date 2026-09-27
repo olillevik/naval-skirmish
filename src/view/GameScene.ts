@@ -38,12 +38,13 @@ const SPACE_DEPTH = 2500;
 const STARS_PER_SQUARE_PX = 1 / 15000;
 /**
  * The vessels are the Pirate Kit's 3D models, rendered by scripts/render-sprites into one sheet each, with a
- * frame per heading. The player's small ship keeps the kit's white sails, and enemy ships come in black, red,
- * green, blue and yellow sails.
+ * frame per heading. The player's small and medium ships keep the kit's white sails, and enemy ships come in
+ * black, red, green, blue and yellow sails.
  */
 const PLAYER_VESSELS: Partial<Record<VesselClassName, { sheet: string; noun: string }>> = {
   smallDinghy: { sheet: 'dinghy', noun: 'dinghy' },
   smallShip: { sheet: 'ship-white', noun: 'ship' },
+  mediumShip: { sheet: 'ship-medium', noun: 'ship' },
 };
 const ENEMY_SHIP_SHEETS = ['ship-black', 'ship-red', 'ship-green', 'ship-blue', 'ship-yellow'];
 const ENEMY_MARK_COLOUR = 0xd62f2f;

@@ -29,14 +29,19 @@ const cabinItems: Record<CabinItemName, CabinItemText> = {
     next: (config, level) => `a Fireball every ${config.cabin.fireballCooldown.cooldownSeconds[level]} s`,
   },
   moreCannons: { name: 'More cannons', next: () => '+1 cannon' },
-  smallShip: {
-    name: 'Small ship',
+  smallShip: shipItem('Small ship', 'smallShip'),
+  mediumShip: shipItem('Medium ship', 'mediumShip'),
+};
+
+function shipItem(name: string, vesselClass: VesselClassName): CabinItemText {
+  return {
+    name,
     next: (config) => {
-      const { health, topSpeed } = config.vesselClasses.smallShip;
+      const { health, topSpeed } = config.vesselClasses[vesselClass];
       return `${health} base max health, ${topSpeed} px/s, slower to get going`;
     },
-  },
-};
+  };
+}
 
 /** The game's UI text, in English. Words follow CONTEXT.md. */
 export const text = {
@@ -54,6 +59,7 @@ export const text = {
   vesselClasses: {
     smallDinghy: 'small dinghy',
     smallShip: 'small ship',
+    mediumShip: 'medium ship',
     enemyDinghy: 'enemy dinghy',
     enemyShip: 'enemy ship',
   } satisfies Record<VesselClassName, string>,

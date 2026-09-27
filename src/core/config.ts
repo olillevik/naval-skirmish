@@ -50,6 +50,9 @@ export const defaultConfig: Config = {
     smallDinghy: { topSpeed: 150, acceleration: 100, turnRate: Math.PI / 2, radius: 20, health: 100, volleySize: 1, arrowDamage: 5, cannons: 0, highestCannons: 0, gold: 0 },
     // The enemy ship's model with white sails, bought in the Cabin. It gets going at 80% of the dinghy's rate.
     smallShip: { topSpeed: 180, acceleration: 80, turnRate: Math.PI / 2, radius: 40, health: 160, volleySize: 1, arrowDamage: 5, cannons: 1, highestCannons: 2, gold: 0 },
+    // The kit's two-masted ship, with white sails. Its sprite frames are 238 px tall against the small ship's 168,
+    // so its radius is the small ship's times 1.4.
+    mediumShip: { topSpeed: 210, acceleration: 60, turnRate: Math.PI / 2, radius: 56, health: 240, volleySize: 1, arrowDamage: 5, cannons: 1, highestCannons: 4, gold: 0 },
     // The same boat as the player's, but weaker.
     enemyDinghy: { topSpeed: 150, acceleration: 100, turnRate: Math.PI / 2, radius: 20, health: 30, volleySize: 1, arrowDamage: 5, cannons: 0, highestCannons: 0, gold: 5 },
     // The sprite is 66 x 113 px, drawn at 1x. Faster than a dinghy, but slow to get going.
@@ -66,5 +69,6 @@ export const defaultConfig: Config = {
     fireballCooldown: { prices: [30, 60, 120], cooldownSeconds: [5, 4, 3] },
     moreCannons: { prices: [60, 120, 240] },
     smallShip: { prices: [150] },
+    mediumShip: { prices: [400] },
   },
 };

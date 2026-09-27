@@ -123,6 +123,8 @@ export interface Config {
     moreCannons: CabinItemConfig;
     /** Swaps the player vessel for a smallShip. */
     smallShip: CabinItemConfig;
+    /** Swaps the player vessel for a mediumShip. Offered once the smallShip is owned. */
+    mediumShip: CabinItemConfig;
   };
 }
 
@@ -148,7 +150,8 @@ export type CabinItemName =
   | 'fireballDamage'
   | 'fireballCooldown'
   | 'moreCannons'
-  | 'smallShip';
+  | 'smallShip'
+  | 'mediumShip';
 
 /** One Cabin item as the player sees it, so the view works out no rules of its own. */
 export interface CabinItem {
@@ -169,10 +172,10 @@ export interface CabinItem {
 export type CabinAction = { type: 'buy'; item: CabinItemName } | { type: 'setTargetingRule'; rule: TargetingRule };
 
 /**
- * The player starts a Run in a smallDinghy and can buy a smallShip in the Cabin. Enemy dinghies sail the same
- * boat as the player's, but are weaker. Enemy ships join later Waves.
+ * The player starts a Run in a smallDinghy and can buy a smallShip in the Cabin, then a mediumShip. Enemy
+ * dinghies sail the same boat as the player's, but are weaker. Enemy ships join later Waves.
  */
-export type VesselClassName = 'smallDinghy' | 'smallShip' | 'enemyDinghy' | 'enemyShip';
+export type VesselClassName = 'smallDinghy' | 'smallShip' | 'mediumShip' | 'enemyDinghy' | 'enemyShip';
 
 /** The stats every vessel of one class shares. */
 export interface VesselClass {
@@ -395,7 +398,7 @@ export function createWorld(seed: number, config: Config): World {
     touching: [],
     cabinLevels: {
       repair: 0, maxHealth: 0, regen: 0, arrowRate: 0, volleySize: 0, flamingArrows: 0, fireballDamage: 0,
-      fireballCooldown: 0, moreCannons: 0, smallShip: 0,
+      fireballCooldown: 0, moreCannons: 0, smallShip: 0, mediumShip: 0,
     },
     state: {
       player: newVessel(0, 'smallDinghy', 0, 0, 0, config),
@@ -459,7 +462,7 @@ function countdownTicksFor(config: Config): number {
 
 export function readState(world: World): WorldState {
   const cabin = (Object.keys(cabinRules) as CabinItemName[])
-    .filter((item) => cabinRules[item].shown?.(world.state.player) ?? true)
+    .filter((item) => cabinRules[item].shown?.(world.cabinLevels) ?? true)
     .map((item) => cabinItem(world, item));
   return { ...world.state, targetingRules, cabin };
 }
@@ -472,8 +475,8 @@ interface CabinRule {
   useful(player: Vessel, config: Config): boolean;
   /** The player vessel once the next level is bought, given the levels with that one included. */
   apply(player: Vessel, config: Config, levels: CabinLevels): Vessel;
-  /** Whether the Cabin lists the item. Always, if left out. */
-  shown?(player: Vessel): boolean;
+  /** Whether the Cabin lists the item, and so whether it can be bought at all. Always, if left out. */
+  shown?(levels: CabinLevels): boolean;
 }
 
 /** A levelled Upgrade whose effect step reads from the levels, through playerStats. */
@@ -507,17 +510,26 @@ const cabinRules: Record<CabinItemName, CabinRule> = {
     useful: (player, config) => !carriesAllCannons(player, config),
     apply: (player, config, levels) => ({ ...player, cannons: playerStats(player.vesselClass, levels, config).cannons }),
   },
-  smallShip: {
+  smallShip: vesselItem('smallShip', () => true),
+  mediumShip: vesselItem('mediumShip', (levels) => levels.smallShip > 0),
+};
+
+/**
+ * Swaps the player vessel for one of the class the item is named after. It shows once offered, and leaves the
+ * Cabin once bought.
+ */
+function vesselItem(vesselClass: VesselClassName & CabinItemName, offered: (levels: CabinLevels) => boolean): CabinRule {
+  return {
     repeatable: false,
     useful: () => true,
-    shown: (player) => player.vesselClass !== 'smallShip',
-    // Position, heading, speed and throttle stay. Health is the new full max, so the swap can rescue a sinking dinghy.
+    shown: (levels) => offered(levels) && levels[vesselClass] === 0,
+    // Position, heading, speed and throttle stay. Health is the new full max, so the swap can rescue a sinking vessel.
     apply: (player, config, levels) => {
-      const { maxHealth, cannons } = playerStats('smallShip', levels, config);
-      return { ...player, vesselClass: 'smallShip', maxHealth, health: maxHealth, cannons };
+      const { maxHealth, cannons } = playerStats(vesselClass, levels, config);
+      return { ...player, vesselClass, maxHealth, health: maxHealth, cannons };
     },
-  },
-};
+  };
+}
 
 function carriesAllCannons(player: Vessel, config: Config): boolean {
   return player.cannons >= config.vesselClasses[player.vesselClass].highestCannons;
@@ -549,7 +561,12 @@ function cabinItem(world: World, item: CabinItemName): CabinItem {
   const level = world.cabinLevels[item];
   const nextPrice = rule.repeatable ? prices[0] : (prices[level] ?? null);
   // Only while the Run is sailing, which means the player vessel is afloat and hasn't started sinking or falling.
-  const canBuy = state.run === 'sailing' && nextPrice !== null && state.gold >= nextPrice && rule.useful(state.player, config);
+  const canBuy =
+    state.run === 'sailing' &&
+    (rule.shown?.(world.cabinLevels) ?? true) &&
+    nextPrice !== null &&
+    state.gold >= nextPrice &&
+    rule.useful(state.player, config);
   const needsBiggerShip = item === 'moreCannons' && nextPrice !== null && carriesAllCannons(state.player, config);
   return { item, level, highestLevel: rule.repeatable ? null : prices.length, nextPrice, canBuy, needsBiggerShip };
 }
